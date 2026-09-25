@@ -528,6 +528,26 @@ exactly like the first-party `omarchy.clock` entry and its `format` key. Writing
 `{"id": "...", "settings": {…}}` instead silently nests everything one level too
 deep and every `setting()` call falls back to its default.
 
+**How to set them.** There is no GUI editor for a plugin's schema in this
+Omarchy version — even first-party plugins (`omarchy.agents`, `omarchy.clock`)
+report `schema: []` through `omarchy-shell shell listPlugins`, because the shell
+reads a top-level `meta.schema` that nobody populates; `barWidget.schema` is
+declarative metadata. The working path is the CLI, which also **does not validate
+key names** (a typo is written happily and silently does nothing):
+
+```bash
+omarchy bar set bearthomas.luogu iconText 洛谷
+omarchy bar set bearthomas.luogu refreshIntervalSec 120
+omarchy bar set bearthomas.luogu markdownBlockLimit 40
+omarchy bar set bearthomas.luogu defaultLanguage "C++20"
+omarchy bar set bearthomas.luogu showUnreadBadge false
+```
+
+Without `--json` every value is written as a **string**, which is why the reads
+coerce: integers go through `Number(...)`, and the boolean is compared as
+`String(value) !== "false"` — the string `"false"` is truthy in JS, so a plain
+`setting("showUnreadBadge", true)` would have left the badge on.
+
 Verified live by seeding those keys and restarting: `icon=洛谷`,
 `timerIntervalMs=120000` (was 300000), `mdLimit=40`, `defaultLangId=27` for
 `C++20`. The test values were then removed so the shipped defaults apply; the
