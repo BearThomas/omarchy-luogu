@@ -1672,6 +1672,100 @@ function parsePaste(raw) {
   }
 }
 
+// --- 代码高亮（编辑器用）-----------------------------------------------------
+// 自己写的词法扫描：不做完整解析，只够把注释/字符串/数字/关键字/类型/函数名
+// 区分出来。返回带 <span> 的 HTML，交给 Text 的 RichText 渲染。换行必须显式
+// 变成 <br/>（RichText 引擎按 HTML 规则折叠空白），而且**不能换行折行**，否则
+// 高亮层会和可编辑层错位 —— 编辑器那边用 NoWrap + 横向滚动来保证逐行对齐。
+var CODE_KEYWORDS = ["alignas","alignof","asm","auto","break","case","catch","class","const","constexpr","continue","decltype","default","delete","do","dynamic_cast","else","enum","explicit","export","extern","false","for","friend","goto","if","inline","mutable","namespace","new","noexcept","nullptr","operator","private","protected","public","register","reinterpret_cast","return","sizeof","static","static_assert","static_cast","struct","switch","template","this","throw","true","try","typedef","typeid","typename","union","using","virtual","volatile","while","and","or","not","xor"]
+var CODE_TYPES = ["bool","char","char16_t","char32_t","double","float","int","long","short","signed","unsigned","void","wchar_t","size_t","string","vector","map","set","pair","queue","stack","deque","priority_queue","unordered_map","unordered_set","array","tuple","bitset","complex","function","optional","variant","string_view","int64_t","uint64_t","int32_t","uint32_t","__int128","ll","ull","int","double","long"]
+var CODE_PY_KEYWORDS = ["and","as","assert","async","await","break","class","continue","def","del","elif","else","except","False","finally","for","from","global","if","import","in","is","lambda","None","nonlocal","not","or","pass","raise","return","True","try","while","with","yield","match","case","self"]
+var CODE_PY_BUILTINS = ["abs","all","any","bin","bool","bytes","chr","dict","divmod","enumerate","eval","filter","float","format","frozenset","getattr","hasattr","hash","hex","id","input","int","isinstance","iter","len","list","map","max","min","next","object","oct","open","ord","pow","print","range","repr","reversed","round","set","setattr","slice","sorted","str","sum","super","tuple","type","zip"]
+
+// VSCode 的暗/亮两套配色，够用即可
+function codePalette(dark) {
+  return dark
+    ? { comment: "#6A9955", string: "#CE9178", number: "#B5CEA8", keyword: "#569CD6", pyKeyword: "#C586C0", type: "#4EC9B0", func: "#DCDCAA", pre: "#C586C0", plain: null }
+    : { comment: "#008000", string: "#A31515", number: "#098658", keyword: "#0000FF", pyKeyword: "#AF00DB", type: "#267F99", func: "#795E26", pre: "#AF00DB", plain: null }
+}
+
+function escapeHtml(text) {
+  return String(text === null || text === undefined ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+function highlightCode(code, language, dark) {
+  var source = String(code === null || code === undefined ? "" : code)
+  if (source === "") return ""
+  var palette = codePalette(dark !== false)
+  var python = /python|pypy/i.test(String(language || ""))
+  var keywords = python ? CODE_PY_KEYWORDS : CODE_KEYWORDS
+  var types = python ? CODE_PY_BUILTINS : CODE_TYPES
+  var out = []
+  var i = 0
+  var lineStart = true
+  while (i < source.length) {
+    var rest = source.slice(i)
+    var match
+    // 注释
+    if (python ? rest.charAt(0) === "#" : (match = /^\/\/[^\n]*/.exec(rest)) || (match = /^\/\*[\s\S]*?\*\//.exec(rest)) || (python && false)) {
+      var commentText
+      if (python && rest.charAt(0) === "#") {
+        match = /^#[^\n]*/.exec(rest)
+      }
+      commentText = match ? match[0] : ""
+      if (commentText === "") { out.push(escapeHtml(rest.charAt(0))); i += 1; lineStart = rest.charAt(0) === "\n"; continue }
+      out.push(span(palette.comment, commentText))
+      i += commentText.length
+      lineStart = commentText.charAt(commentText.length - 1) === "\n"
+      continue
+    }
+    // 字符/字符串
+    match = /^(?:u8|u|U|L)?(?:R"\([\s\S]*?\)"|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/.exec(rest)
+    if (match) { out.push(span(palette.string, match[0])); i += match[0].length; lineStart = false; continue }
+    // 预处理指令（整行）
+    if (!python && rest.charAt(0) === "#") {
+      match = /^#[^\n]*/.exec(rest)
+      out.push(span(palette.pre, match[0]))
+      i += match[0].length
+      lineStart = false
+      continue
+    }
+    // 数字
+    match = /^\d[\w.]*(?:[eE][+-]?\d+)?/.exec(rest)
+    if (match) { out.push(span(palette.number, match[0])); i += match[0].length; lineStart = false; continue }
+    // 标识符
+    match = /^[A-Za-z_]\w*/.exec(rest)
+    if (match) {
+      var word = match[0]
+      var after = source.slice(i + word.length)
+      var isCall = /^\s*\(/.test(after)
+      var color = palette.plain
+      if (keywords.indexOf(word) >= 0) color = python ? palette.pyKeyword : palette.keyword
+      else if (types.indexOf(word) >= 0) color = palette.type
+      else if (isCall) color = palette.func
+      out.push(color ? span(color, word) : escapeHtml(word))
+      i += word.length
+      lineStart = false
+      continue
+    }
+    // 其它：逐字符，换行转 <br/>
+    var ch = source.charAt(i)
+    if (ch === "\n") { out.push("<br/>"); lineStart = true; i += 1; continue }
+    out.push(escapeHtml(ch))
+    i += 1
+  }
+  return out.join("")
+
+  function span(color, text) {
+    // 里面的换行同样要转 <br/>，并保持同样数量的行
+    var escaped = escapeHtml(text).replace(/\n/g, "<br/>")
+    return '<span style="color:' + color + ';">' + escaped + "</span>"
+  }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     difficultyName: difficultyName,
@@ -1690,6 +1784,8 @@ if (typeof module !== "undefined") {
     parseArticle: parseArticle,
     utf8Base64: utf8Base64,
     latexToHtml: latexToHtml,
+    highlightCode: highlightCode,
+    escapeHtml: escapeHtml,
     parsePasteList: parsePasteList,
     parsePaste: parsePaste,
     parsePrizeSettings: parsePrizeSettings,

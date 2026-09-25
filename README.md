@@ -453,6 +453,67 @@ Also supported on the problem page: the per-problem discussion list
 (`/discuss?forum=<pid>`, 30 per page) and a thread view with Markdown-rendered
 replies, paginated the same way as the 帖子 page.
 
+## The code editor, sample running and the nvim escape hatch
+
+`CodeEditor.qml` is a hand-rolled editor, because QML ships nothing with syntax
+highlighting:
+
+- The **highlight layer** is a `Text` with `textFormat: Text.RichText`, fed by
+  `Model.highlightCode(code, language, dark)` — a small scanner that colours
+  comments, strings, numbers, keywords, types and call names (VSCode's dark and
+  light palettes). Every newline must be emitted as `<br/>`, and HTML must be
+  escaped, or the layer and the editable layer drift apart.
+- The **editable layer** is a `QQC.TextArea` on top with `color: "transparent"`.
+  The caret therefore needs `cursorDelegate` (a 2px `Rectangle`) or it is
+  invisible too; selection still shows through `selectionColor`.
+- **`NoWrap` + horizontal scrolling is mandatory.** With wrapping, the two layers
+  break lines at different points and the whole document misaligns. It also
+  matches VSCode's default.
+- **Line height has to be measured, not derived.** The gutter, the highlight layer
+  and the editor must agree on a line height; my formula (`FontMetrics.height +
+  0.35 * pixelSize`) gave 18.52 while the TextArea actually lays out at **15** for
+  an 11px font, so the gutter drifted away from the code as soon as you scrolled.
+  The editor now reads `(contentHeight - topPadding - bottomPadding) / lineCount`
+  and drives all three layers from it — verified on an 8-line file:
+  `gutterH = highlightH = editorH = 120`.
+- Keys: `Tab` indents, `Enter` keeps the indentation (and adds one level after
+  `{` / Python `:`), brackets and quotes auto-close, `Ctrl+/` toggles a line
+  comment, `Ctrl+Enter` submits, `Ctrl+R` runs the samples.
+
+### 评测样例 runs locally
+
+`run-samples.sh` takes one base64 JSON line on stdin
+(`{language, code, timeLimitMs, samples:[{input, output}]}`) and answers
+`{compile:{ok,message}, results:[{index,status,timeMs,stdout,expected,stderr}]}`.
+It compiles in a temp dir with `g++`/`gcc`/`javac`/`rustc`/`go`/`fpc`, interprets
+with `python3`/`node`, runs each sample under `timeout (limit + 2s)`, and compares
+with trailing whitespace and trailing blank lines normalised — the same way a
+judge does. Verdicts **AC / WA / CE / TLE / RE** with the diff and timing.
+Nothing is sent to Luogu and no submission record is created. (It does execute
+your code locally with your own privileges, exactly like an IDE would.)
+
+### nvim, for people who want the real thing
+
+Quickshell has no terminal widget, so a real nvim cannot be *embedded*. Instead
+「用 nvim」 writes the buffer to `/tmp/luogu-edit/<pid>.<ext>` (the file must exist
+before the watcher starts — `FileView` cannot observe a file that does not exist
+yet), launches `omarchy-launch-terminal nvim <file>`, and a
+`FileView { watchChanges: true }` syncs every save straight back into the editor.
+Verified end to end: write → launch → external edit → `已从 nvim 同步（113 字）`.
+
+### Two traps this cost
+
+- **`ScrollBar.vertical:` needs the qualified name** when the module is aliased
+  (`import QtQuick.Controls as QQC`). Writing bare `ScrollBar.vertical: ` fails as
+  *Non-existent attached object*, which cascades: `CodeEditor` unavailable →
+  `ProblemPanel` unavailable → **the whole plugin fails to load**. `qmllint`
+  reports 0 errors; only the runtime log says so.
+- **A duplicate method name silently kills the widget.** Patching the deployed
+  `BarWidget.qml` twice left two `edresult`/`ednvim`/`ednstate` definitions; the
+  log said `Duplicate method name` and the widget never registered — no IPC target
+  (`Target not found` for every call) and the bar slot lost its 洛 icon. A grep
+  whose output I had truncated with `head` is what hid the existing definitions.
+
 ## 云剪贴板 (paste)
 
 Read side, fully mapped:

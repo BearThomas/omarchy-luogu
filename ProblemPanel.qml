@@ -50,6 +50,19 @@ Column {
   property int rid: 0
   property var record: null
   property bool polling: false
+  // 本地跑样例（不联网、不产生提交记录）
+  property var sampleRun: null
+  property bool sampleRunning: false
+  property string sampleStatus: ""
+  // 高亮配色按主题明暗切换（VSCode 的暗/亮两套）
+  readonly property bool isDarkTheme: {
+    var background = Color.background
+    return (0.299 * background.r + 0.587 * background.g + 0.114 * background.b) < 0.5
+  }
+  // 用外部 nvim 编辑：写临时文件 → 开终端跑 nvim → FileView 监听文件变化同步回来
+  property string externalPath: ""
+  property string nvimStatus: ""
+  readonly property string runnerPath: String(Qt.resolvedUrl("run-samples.sh")).replace("file://", "")
   property string captchaImage: ""
   property bool captchaReady: false
   property string captchaCode: ""
@@ -130,6 +143,46 @@ Column {
     }
   }
 
+  function sourceExtension() {
+    var name = Model.languageName(root.languageId)
+    if (/python|pypy/i.test(name)) return ".py"
+    if (/java/i.test(name)) return ".java"
+    if (/node|javascript/i.test(name)) return ".js"
+    if (/rust/i.test(name)) return ".rs"
+    if (/go$/i.test(name)) return ".go"
+    if (/pascal/i.test(name)) return ".pas"
+    if (name === "C") return ".c"
+    return ".cpp"
+  }
+
+  // 写文件 → 等写完再启动终端（FileView 无法监听尚不存在的文件）
+  function openInNvim() {
+    if (root.code.trim() === "") { root.nvimStatus = "代码不能为空"; return }
+    root.nvimStatus = "正在写入临时文件…"
+    var path = "/tmp/luogu-edit/" + (root.pid === "" ? "scratch" : root.pid) + root.sourceExtension()
+    root.externalPath = ""
+    nvimWriteProc.payloadBase64 = Model.utf8Base64(JSON.stringify({ path: path, code: root.code }))
+    nvimWriteProc.running = true
+  }
+
+  // 本地编译 + 用样例输入运行 + 与期望输出比对。整个流程不碰洛谷。
+  function runSamples() {
+    if (root.sampleRunning) return
+    if (root.code.trim() === "") { root.sampleStatus = "代码不能为空"; return }
+    var samples = root.detail && Array.isArray(root.detail.samples) ? root.detail.samples : []
+    if (samples.length === 0) { root.sampleStatus = "这道题没有样例数据"; return }
+    root.sampleRunning = true
+    root.sampleRun = null
+    root.sampleStatus = "正在编译并运行样例…"
+    runProc.payloadBase64 = Model.utf8Base64(JSON.stringify({
+      language: Model.languageName(root.languageId),
+      code: root.code,
+      timeLimitMs: root.detail && root.detail.timeLimit > 0 ? root.detail.timeLimit : 1000,
+      samples: samples.map(function(item) { return { input: item.input, output: item.output } })
+    }))
+    runProc.running = true
+  }
+
   function submit() {
     if (root.code.trim() === "") { root.submitStatus = "代码不能为空"; return }
     // 实测：不管普通题还是比赛题，提交都要验证码（语言校验通过后就是验证码校验）
@@ -203,6 +256,95 @@ Column {
         if (String(errorMessage).indexOf("验证码") >= 0) { root.captchaImage = ""; root.captchaReady = false; root.loadCaptcha() }
       }
     }
+  }
+
+  // 外部编辑器：先落盘（避免 FileView 监听不到还不存在的文件），再开终端
+  Process {
+    id: nvimWriteProc
+    property string payloadBase64: ""
+    property string targetPath: ""
+    stdinEnabled: true
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; p=$(jq -r .path \"$f\"); mkdir -p \"$(dirname \"$p\")\"; jq -r .code \"$f\" > \"$p\"; printf '%s' \"$p\"", "luogu-nvim-write"]
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { nvimWriteProc.targetPath = String(text || "").trim() }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 || nvimWriteProc.targetPath === "") {
+        root.nvimStatus = "写入临时文件失败"
+        return
+      }
+      root.externalPath = nvimWriteProc.targetPath
+      root.nvimStatus = "已在 nvim 中打开；保存后自动同步回这里"
+      nvimLaunchProc.command = ["omarchy-launch-terminal", "nvim", root.externalPath]
+      nvimLaunchProc.running = true
+    }
+  }
+
+  Process {
+    id: nvimLaunchProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.nvimStatus = "启动 nvim 失败（omarchy-launch-terminal 退出码 " + exitCode + "）"
+    }
+  }
+
+  // 监听外部编辑器的保存
+  FileView {
+    id: nvimFile
+    path: root.externalPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: {
+      var content = nvimFile.text()
+      if (content !== undefined && content !== null && content !== root.code) {
+        root.code = content
+        root.nvimStatus = "已从 nvim 同步（" + content.length + " 字）"
+      }
+    }
+  }
+
+  // 样例运行器：一行 base64(JSON) 进 stdin，脚本返回 JSON 结果
+  Process {
+    id: runProc
+    property string payloadBase64: ""
+    stdinEnabled: true
+    command: ["sh", root.runnerPath]
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          root.sampleRun = JSON.parse(String(text || ""))
+          var results = root.sampleRun.results || []
+          var passed = 0
+          var verdict = "全部通过"
+          for (var i = 0; i < results.length; i++) {
+            if (results[i].status === "AC") passed++
+            else verdict = "有未通过"
+          }
+          if (root.sampleRun.compile && root.sampleRun.compile.ok === false) verdict = "编译失败"
+          root.sampleStatus = verdict + "（" + passed + " / " + results.length + "）"
+        } catch (error) {
+          root.sampleRun = null
+          root.sampleStatus = "运行器返回异常：" + String(error)
+        }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = String(text || "").trim()
+        if (message !== "") root.sampleStatus = "运行器出错：" + message.slice(0, 160)
+      }
+    }
+    onExited: function(exitCode) { root.sampleRunning = false }
   }
 
   Process {
@@ -397,6 +539,38 @@ Column {
         }
         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.submit() }
       }
+      Rectangle {
+        readonly property bool ready: !root.sampleRunning && root.code.trim() !== ""
+        width: Style.space(104)
+        height: Style.space(34)
+        radius: Style.cornerRadius
+        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+        Text {
+          anchors.centerIn: parent
+          text: root.sampleRunning ? "运行中…" : "本地跑样例"
+          color: parent.ready ? root.foreground : Qt.darker(root.foreground, 1.4)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.runSamples() }
+      }
+      Rectangle {
+        width: Style.space(96)
+        height: Style.space(34)
+        radius: Style.cornerRadius
+        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+        Text { anchors.centerIn: parent; text: "用 nvim"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openInNvim() }
+      }
+      Text {
+        width: Math.max(Style.space(80), parent.width - Style.space(210) - Style.space(150) - Style.space(92) - Style.space(104) - Style.space(40))
+        anchors.verticalCenter: parent.verticalCenter
+        text: "Ctrl+Enter 提交 · Ctrl+R 跑样例 · Ctrl+/ 注释"
+        elide: Text.ElideRight
+        color: Qt.darker(root.foreground, 1.6)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
     }
 
     Row {
@@ -450,40 +624,129 @@ Column {
       }
     }
 
-    // 代码可能很长，TextArea 自己不会滚动，套一层 Flickable。
-    Flickable {
+    // 样例结果：本地跑出来的判定（不联网、不产生提交记录）
+    Rectangle {
+      visible: root.sampleStatus !== "" || root.sampleRun !== null
       width: parent.width
-      height: Style.space(260)
-      clip: true
-      contentWidth: width
-      contentHeight: codeArea.contentHeight + Style.space(16)
-      boundsBehavior: Flickable.StopAtBounds
+      height: sampleBody.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
 
-      QQC.TextArea {
-        id: codeArea
-        width: parent.width
-        placeholderText: "在这里写代码（上次提交的代码会自动填进来）"
-        wrapMode: QQC.TextArea.WrapAnywhere
-        selectByMouse: true
-        text: root.code
-        color: root.foreground
-        placeholderTextColor: Qt.darker(root.foreground, 1.6)
-        selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
-        selectedTextColor: root.foreground
-        font.family: root.monoFamily
-        font.pixelSize: Style.font.bodySmall
-        readonly property var borderSpec: Border.controlSpec(codeArea.activeFocus ? "focus" : "normal", root.foreground, Color.accent)
-        leftPadding: Style.spacing.controlPaddingX + Border.left(borderSpec)
-        rightPadding: Style.spacing.controlPaddingX + Border.right(borderSpec)
-        topPadding: Style.spacing.inputPaddingY + Border.top(borderSpec)
-        bottomPadding: Style.spacing.inputPaddingY + Border.bottom(borderSpec)
-        background: BorderSurface {
-          color: Style.controlFill(codeArea.activeFocus, false, root.foreground, Color.accent)
-          borderSpec: codeArea.borderSpec
-          radius: Style.cornerRadius
+      Column {
+        id: sampleBody
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(10)
+        spacing: Style.space(6)
+
+        Text {
+          width: parent.width
+          text: root.sampleStatus
+          color: {
+            if (root.sampleRun === null) return root.foreground
+            if (root.sampleRun.compile && root.sampleRun.compile.ok === false) return Color.urgent
+            var results = root.sampleRun.results || []
+            for (var i = 0; i < results.length; i++) if (results[i].status !== "AC") return Color.urgent
+            return Color.accent
+          }
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
         }
-        onTextChanged: root.code = text
+
+        Text {
+          width: parent.width
+          visible: root.sampleRun !== null && root.sampleRun.compile && root.sampleRun.compile.ok === false && root.sampleRun.compile.message !== ""
+          text: root.sampleRun && root.sampleRun.compile ? root.sampleRun.compile.message : ""
+          wrapMode: Text.WrapAnywhere
+          maximumLineCount: 8
+          elide: Text.ElideRight
+          color: Color.urgent
+          font.family: "monospace"
+          font.pixelSize: Style.font.caption
+        }
+
+        Repeater {
+          model: root.sampleRun ? (root.sampleRun.results || []) : []
+          delegate: Column {
+            required property var modelData
+            width: sampleBody.width
+            spacing: Style.space(4)
+            Text {
+              width: parent.width
+              text: "样例 " + modelData.index + "   " + modelData.status + "   " + modelData.timeMs + "ms"
+              color: modelData.status === "AC" ? Color.accent : Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              visible: modelData.status === "WA"
+              Column {
+                width: (parent.width - Style.space(8)) / 2
+                spacing: 2
+                Text { text: "期望输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                Text { width: parent.width; text: modelData.expected; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+              }
+              Column {
+                width: (parent.width - Style.space(8)) / 2
+                spacing: 2
+                Text { text: "实际输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                Text { width: parent.width; text: modelData.stdout === "" ? "(空)" : modelData.stdout; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+              }
+            }
+            Text {
+              width: parent.width
+              visible: modelData.status === "RE" && modelData.stderr !== ""
+              text: modelData.stderr
+              wrapMode: Text.WrapAnywhere
+              maximumLineCount: 4
+              elide: Text.ElideRight
+              color: Color.urgent
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              width: parent.width
+              visible: modelData.status === "TLE"
+              text: "超出时限（本地按 " + (root.detail && root.detail.timeLimit > 0 ? root.detail.timeLimit : 1000) + "ms + 2s 宽限）"
+              color: Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
       }
+    }
+
+    Text {
+      width: parent.width
+      visible: root.nvimStatus !== ""
+      elide: Text.ElideRight
+      text: root.nvimStatus + (root.externalPath !== "" ? "   " + root.externalPath : "")
+      color: Qt.darker(root.foreground, 1.5)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    // 代码编辑：CodeEditor（行号 + 语法高亮 + 自动缩进/括号补全）。
+    // 快捷键：Ctrl+Enter 提交、Ctrl+R 跑样例、Ctrl+/ 注释。
+    CodeEditor {
+      id: codeEditor
+      width: parent.width
+      height: Style.space(340)
+      text: root.code
+      language: Model.languageName(root.languageId)
+      foreground: root.foreground
+      accentColor: Color.accent
+      fontFamily: root.monoFamily
+      dark: root.isDarkTheme
+      onTextChanged: root.code = text
+      onSubmitted: root.submit()
+      onRunRequested: root.runSamples()
     }
 
     Rectangle {
