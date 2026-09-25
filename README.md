@@ -466,7 +466,32 @@ Three GET endpoints back the 设置 page in the sidebar:
 `/user/setting/<name>` only answers for `prize` and `security`; `profile`, `info`,
 `account`, `bind`, `privacy`, `notification`, `email`, `phone`… all 404.
 
-**Editing is not implemented, and that is not an oversight.** The write endpoints
+### Editing 个人信息
+
+`POST /user/setting/userSpace` writes the space settings. Three things about it
+matter, all measured:
+
+- **It is a partial update.** An empty body answers `{"id":<uid>}` and changes
+  **nothing**, and only the keys present in the body are touched — so the page
+  sends just the fields the user actually edited and leaves the rest alone.
+  Body: `{slogan?, introduction?, background?}`, plus `X-CSRF-Token` (scraped from
+  the homepage `<meta name="csrf-token">`, as for every other write).
+- `GET` on it answers **405 Method Not Allowed** — that is how the route was
+  confirmed to exist after the guesses came back 404.
+- Round-trip verified through the widget itself: write `introduction`, re-read the
+  profile and see the value, then write `""` back — the profile ended
+  **field-for-field identical** to the snapshot taken first.
+
+One bug this nearly shipped: the save compares the form drafts against
+`profile.<field>`, and `profile.background` was missing from `parseProfile`, so
+the comparison was `"" !== undefined` — true — and **every** save also sent an
+empty `background` (which would have wiped the user's space background if the
+server had not ignored the empty string). Normalise both sides
+(`value ?? ""`) before comparing, and keep `parseProfile` complete.
+
+**Editing 奖项认证/账号安全 is not implemented**: those write routes are still
+unknown — the settings page HTML answers a 302 loop to non-browser clients, so its
+JS bundle (which names them) cannot be read. The write endpoints
 are not discoverable from here: the settings *page* HTML answers a 302 loop back to
 itself for anything that is not a real browser (`ws-action: cc` from Luogu's CDN),
 so its front-end bundle — which would name the update routes — cannot be read, and

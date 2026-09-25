@@ -73,6 +73,11 @@ Panel {
   property var accountBindings: null
   property bool accountLoading: false
   property int accountPending: 0
+  property string userSpaceSlogan: ""
+  property string userSpaceIntro: ""
+  property string userSpaceBackground: ""
+  property bool userSpaceSaving: false
+  property string userSpaceStatus: ""
   property bool tagTableLoading: false
   property string problemView: "list"
   property var problemList: []
@@ -557,6 +562,11 @@ Panel {
     if (uid === "" || clientId === "") return
     accountPending = 3
     accountLoading = true
+    // 编辑框初值 = 服务器当前值（页面打开时同步一次，避免自动刷新打断输入）
+    userSpaceSlogan = root.profile.slogan
+    userSpaceIntro = root.profile.introduction
+    userSpaceBackground = root.profile.background
+    userSpaceStatus = ""
     var base = ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/$3?_contentOnly=1\"", "luogu-account", uid, clientId]
     accountPrizeProc.command = base.concat(["user/setting/prize"])
     accountPrizeProc.running = true
@@ -565,6 +575,29 @@ Panel {
     accountBindingsProc.command = base.concat(["user/setting"])
     accountBindingsProc.running = true
   }
+
+  // 写回洛谷个人空间设置。实测 POST /user/setting/userSpace 是**部分更新**：
+  // 只改请求体里出现的键（空体 {} 返回 {"id":uid} 且什么都不变），所以这里只发
+  // 真正改动过的字段，避免误伤背景图之类。
+  function saveUserSpace() {
+    if (csrfToken === "") { userSpaceStatus = "CSRF 令牌尚未准备好，请稍后再试"; return }
+    if (root.userSpaceProcRunning()) return
+    // 归一化后再比较：profile 里缺字段时是 undefined，而输入框是 ""，直接比会把
+    // 空串当成「改动过」，于是每次保存都多送一个空 background（实测服务器会忽略，
+    // 但那是运气，不能依赖）。
+    function serverValue(value) { return value === undefined || value === null ? "" : String(value) }
+    var body = {}
+    if (userSpaceSlogan !== serverValue(root.profile.slogan)) body.slogan = userSpaceSlogan
+    if (userSpaceIntro !== serverValue(root.profile.introduction)) body.introduction = userSpaceIntro
+    if (userSpaceBackground !== serverValue(root.profile.background)) body.background = userSpaceBackground
+    if (Object.keys(body).length === 0) { userSpaceStatus = "没有改动"; return }
+    userSpaceSaving = true
+    userSpaceStatus = "正在保存…"
+    userSpaceProc.payloadBase64 = Model.utf8Base64(JSON.stringify(body))
+    userSpaceProc.running = true
+  }
+
+  function userSpaceProcRunning() { return userSpaceProc.running }
 
   function accountDone() {
     accountPending = Math.max(0, accountPending - 1)
@@ -1297,6 +1330,44 @@ Panel {
 
   // 评测轮询：status 0/1 是 Waiting/Judging，出结果就停。
 
+
+  // 个人信息写回：走 stdin 传 base64（同交题那套，避免引号问题）
+  Process {
+    id: userSpaceProc
+    property string payloadBase64: ""
+    stdinEnabled: true
+    property bool succeeded: false
+    property string errorMessage: ""
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/user/setting' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/user/setting/userSpace'", "luogu-userspace", uid, clientId, csrfToken]
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = root.splitHttpCode(text)
+        userSpaceProc.succeeded = root.writeResponseSucceeded(parsed.body, parsed.code)
+        userSpaceProc.errorMessage = root.writeFailureMessage(parsed.code, parsed.body)
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = String(text || "").trim()
+        if (message !== "" && userSpaceProc.errorMessage === "") userSpaceProc.errorMessage = message.slice(0, 160)
+      }
+    }
+    onExited: function(exitCode) {
+      root.userSpaceSaving = false
+      if (exitCode === 0 && succeeded) {
+        root.userSpaceStatus = "已保存"
+        root.refresh()
+      } else {
+        root.userSpaceStatus = "保存失败：" + (errorMessage || "请稍后重试")
+      }
+    }
+  }
 
   Process {
     id: accountPrizeProc
@@ -4152,6 +4223,90 @@ Panel {
                   color: Qt.darker(root.contentForeground, 1.4)
                   font.family: root.contentFontFamily
                   font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+
+            // ---- 编辑个人信息（写回洛谷）----
+            Rectangle {
+              width: parent.width
+              height: editBody.implicitHeight + Style.space(20)
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+
+              Column {
+                id: editBody
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(8)
+
+                Text { text: "编辑个人信息"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption; font.letterSpacing: 1.2 }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Text { width: Style.space(48); anchors.verticalCenter: parent.verticalCenter; text: "签名"; color: Qt.darker(root.contentForeground, 1.4); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  TextField {
+                    width: parent.width - Style.space(56)
+                    placeholderText: "个人签名"
+                    text: root.userSpaceSlogan
+                    foreground: root.contentForeground
+                    font.family: root.contentFontFamily
+                    onTextChanged: root.userSpaceSlogan = text
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Text { width: Style.space(48); anchors.verticalCenter: parent.verticalCenter; text: "简介"; color: Qt.darker(root.contentForeground, 1.4); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  TextField {
+                    width: parent.width - Style.space(56)
+                    placeholderText: "个人简介"
+                    text: root.userSpaceIntro
+                    foreground: root.contentForeground
+                    font.family: root.contentFontFamily
+                    onTextChanged: root.userSpaceIntro = text
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Text { width: Style.space(48); anchors.verticalCenter: parent.verticalCenter; text: "背景图"; color: Qt.darker(root.contentForeground, 1.4); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  TextField {
+                    width: parent.width - Style.space(56)
+                    placeholderText: "背景图链接（新图仍需在网页上传）"
+                    text: root.userSpaceBackground
+                    foreground: root.contentForeground
+                    font.family: root.contentFontFamily
+                    onTextChanged: root.userSpaceBackground = text
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Rectangle {
+                    readonly property bool ready: !root.userSpaceSaving && csrfToken !== ""
+                    width: Style.space(88)
+                    height: Style.space(32)
+                    radius: Style.cornerRadius
+                    color: ready ? Color.accent : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.14)
+                    Text { anchors.centerIn: parent; text: root.userSpaceSaving ? "保存中…" : "保存"; color: parent.ready ? Color.background : Qt.darker(root.contentForeground, 1.3); font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.saveUserSpace() }
+                  }
+                  Text {
+                    width: parent.width - Style.space(96)
+                    anchors.verticalCenter: parent.verticalCenter
+                    elide: Text.ElideRight
+                    text: root.userSpaceStatus !== "" ? root.userSpaceStatus : "只提交改动过的字段；保存后立即同步到洛谷"
+                    color: root.userSpaceStatus.indexOf("失败") >= 0 ? Color.urgent : Qt.darker(root.contentForeground, 1.5)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                  }
                 }
               }
             }
