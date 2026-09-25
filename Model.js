@@ -1766,6 +1766,18 @@ function highlightCode(code, language, dark) {
   }
 }
 
+// POST /paste/_new、/paste/_edit、/paste/_batop 成功时返回 {id: "..."}
+function parsePasteWrite(body) {
+  try {
+    var payload = JSON.parse(String(body === undefined || body === null ? "" : body))
+    var message = payload.errorMessage || payload.message
+    if (!message && typeof payload.data === "string") message = payload.data
+    return { id: textOr(payload.id, ""), message: textOr(message, "") }
+  } catch (error) {
+    return { id: "", message: "" }
+  }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     difficultyName: difficultyName,
@@ -1787,6 +1799,7 @@ if (typeof module !== "undefined") {
     highlightCode: highlightCode,
     escapeHtml: escapeHtml,
     parsePasteList: parsePasteList,
+    parsePasteWrite: parsePasteWrite,
     parsePaste: parsePaste,
     parsePrizeSettings: parsePrizeSettings,
     parseAccountSecurity: parseAccountSecurity,

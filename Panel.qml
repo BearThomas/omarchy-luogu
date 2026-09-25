@@ -87,6 +87,16 @@ Panel {
   property var pasteDetail: null
   property string pasteDetailId: ""
   property bool pasteDetailLoading: false
+  // 云剪贴板的写操作：新建/编辑都要图形验证码（GET /lg4/captcha）
+  property bool pasteComposerOpen: false
+  property string pasteComposerMode: "create"
+  property string pasteDraftData: ""
+  property bool pasteDraftPublic: false
+  property string pasteCaptchaImage: ""
+  property bool pasteCaptchaReady: false
+  property string pasteCaptchaCode: ""
+  property bool pasteSaving: false
+  property string pasteWriteStatus: ""
   property bool tagTableLoading: false
   property string problemView: "list"
   property var problemList: []
@@ -643,6 +653,58 @@ Panel {
     clipboardHelper.text = String(value === undefined || value === null ? "" : value)
     clipboardHelper.selectAll()
     clipboardHelper.copy()
+  }
+
+  function refreshPasteCaptcha() {
+    if (pasteCaptchaProc.running) return
+    root.pasteCaptchaReady = false
+    root.pasteCaptchaImage = ""
+    root.pasteCaptchaCode = ""
+    pasteCaptchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/\" -H \"Cookie: _uid=$1;__client_id=$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-paste-captcha", uid, clientId]
+    pasteCaptchaProc.running = true
+  }
+
+  function openPasteComposer() {
+    root.pasteComposerMode = "create"
+    root.pasteDraftData = ""
+    root.pasteDraftPublic = false
+    root.pasteWriteStatus = ""
+    root.pasteComposerOpen = true
+    root.refreshPasteCaptcha()
+  }
+
+  function startPasteEdit() {
+    if (!root.pasteDetail) return
+    root.pasteComposerMode = "edit"
+    root.pasteDraftData = root.pasteDetail.data
+    root.pasteDraftPublic = root.pasteDetail.isPublic
+    root.pasteWriteStatus = ""
+    root.pasteComposerOpen = true
+    root.refreshPasteCaptcha()
+  }
+
+  function closePasteComposer() {
+    root.pasteComposerOpen = false
+    root.pasteWriteStatus = ""
+  }
+
+  // 新建走 POST /paste/_new，编辑走 POST /paste/_edit；两者都带图形验证码
+  // （路由名来自 GET /_lfe/config 的 route.paste.* —— 社区文档里的 /paste/new 已过时）
+  function submitPasteWrite() {
+    if (csrfToken === "") { root.pasteWriteStatus = "CSRF 令牌尚未准备好，请稍后再试"; return }
+    if (root.pasteSaving) return
+    if (root.pasteDraftData === "" && root.pasteComposerMode === "create") { root.pasteWriteStatus = "内容不能为空"; return }
+    if (root.pasteCaptchaCode.trim() === "") { root.pasteWriteStatus = "请填写验证码（点图片可换一张）"; return }
+    var body = { data: root.pasteDraftData, public: root.pasteDraftPublic, captcha: root.pasteCaptchaCode.trim() }
+    if (root.pasteComposerMode === "edit") {
+      if (root.pasteDetailId === "") { root.pasteWriteStatus = "没有正在编辑的剪贴板"; return }
+      body.id = root.pasteDetailId
+    }
+    root.pasteSaving = true
+    root.pasteWriteStatus = root.pasteComposerMode === "edit" ? "正在保存…" : "正在创建…"
+    pasteWriteProc.target = root.pasteComposerMode === "edit" ? "paste/_edit" : "paste/_new"
+    pasteWriteProc.payloadBase64 = Model.utf8Base64(JSON.stringify(body))
+    pasteWriteProc.running = true
   }
 
   function pastePreview(item) {
@@ -1388,6 +1450,69 @@ Panel {
     visible: false
     width: 0
     height: 0
+  }
+
+  // 图形验证码（新的一套，异常类是 CaptchaChallengeException，与交题的
+  // InvalidCaptchaException 不是同一套，所以用 /lg4/captcha 而不是 /api/verify/captcha）
+  Process {
+    id: pasteCaptchaProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var result = JSON.parse(String(text || ""))
+          var data = String(result.data || "")
+          if (data === "") throw new Error("empty")
+          root.pasteCaptchaImage = "data:" + String(result.mime || "image/jpeg") + ";base64," + data
+          root.pasteCaptchaReady = true
+        } catch (error) {
+          root.pasteCaptchaImage = ""
+          root.pasteCaptchaReady = false
+          root.pasteWriteStatus = "验证码获取失败，点图片重试"
+        }
+      }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) { root.pasteCaptchaImage = ""; root.pasteCaptchaReady = false } }
+  }
+
+  Process {
+    id: pasteWriteProc
+    property string target: "paste/_new"
+    property string payloadBase64: ""
+    property string resultId: ""
+    stdinEnabled: true
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4\"", "luogu-paste-write", uid, clientId, csrfToken, target]
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = Model.splitHttpCode(text)
+        var ok = Model.writeResponseSucceeded(parsed.body, parsed.code)
+        var result = Model.parsePasteWrite(parsed.body)
+        pasteWriteProc.resultId = result.id
+        if (ok && result.id !== "") {
+          root.pasteWriteStatus = root.pasteComposerMode === "edit"
+            ? "已保存"
+            : "已创建 /paste/" + result.id + "（链接已复制）"
+          if (root.pasteComposerMode === "create") root.copyToClipboard("https://www.luogu.com.cn/paste/" + result.id)
+          root.pasteComposerOpen = false
+        } else {
+          root.pasteWriteStatus = "失败：" + (result.message !== "" ? result.message : Model.writeFailureMessage(parsed.code, parsed.body))
+          if (String(root.pasteWriteStatus).indexOf("验证码") >= 0) root.refreshPasteCaptcha()
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      root.pasteSaving = false
+      root.loadPastes(false)
+      if (pasteWriteProc.resultId !== "") {
+        root.openPasteDetail(pasteWriteProc.resultId)
+        pasteWriteProc.resultId = ""
+      }
+    }
   }
 
   Process {
@@ -4257,12 +4382,20 @@ Panel {
               width: parent.width
               spacing: Style.space(10)
               Text {
-                width: parent.width - Style.space(200)
+                width: parent.width - Style.space(300)
                 text: "云剪贴板" + (root.pasteCount > 0 ? "  " + root.pasteItems.length + " / " + root.pasteCount : "")
                 color: root.contentForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.iconLarge
                 font.bold: true
+              }
+              Rectangle {
+                width: Style.space(96)
+                height: Style.space(28)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                Text { anchors.centerIn: parent; text: root.pasteComposerOpen ? "取消新建" : "新建剪贴板"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (root.pasteComposerOpen) root.closePasteComposer(); else root.openPasteComposer() }
               }
               Rectangle {
                 width: Style.space(64)
@@ -4278,6 +4411,107 @@ Panel {
                 color: "transparent"
                 Text { anchors.centerIn: parent; text: "打开洛谷剪贴板"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally("https://www.luogu.com.cn/paste") }
+              }
+            }
+
+            // ---------------- 新建 / 编辑表单 ----------------
+            Rectangle {
+              visible: root.pasteComposerOpen
+              width: parent.width
+              height: composerBody.implicitHeight + Style.space(20)
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+
+              Column {
+                id: composerBody
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(8)
+
+                Text {
+                  text: root.pasteComposerMode === "edit" ? ("编辑 /paste/" + root.pasteDetailId) : "新建云剪贴板"
+                  color: Color.accent
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                  font.letterSpacing: 1.2
+                }
+
+                QQC.TextArea {
+                  id: pasteDraftArea
+                  width: parent.width
+                  height: Style.space(150)
+                  wrapMode: QQC.TextArea.WrapAnywhere
+                  selectByMouse: true
+                  text: root.pasteDraftData
+                  color: root.contentForeground
+                  placeholderText: "要放进剪贴板的内容（Markdown 也行）"
+                  placeholderTextColor: Qt.darker(root.contentForeground, 1.6)
+                  selectionColor: Style.selectionFillFor(root.contentForeground, Color.accent)
+                  selectedTextColor: root.contentForeground
+                  font.family: "monospace"
+                  font.pixelSize: Style.font.bodySmall
+                  readonly property var borderSpec: Border.controlSpec(pasteDraftArea.activeFocus ? "focus" : "normal", root.contentForeground, Color.accent)
+                  leftPadding: Style.spacing.controlPaddingX + Border.left(borderSpec)
+                  rightPadding: Style.spacing.controlPaddingX + Border.right(borderSpec)
+                  topPadding: Style.spacing.inputPaddingY + Border.top(borderSpec)
+                  bottomPadding: Style.spacing.inputPaddingY + Border.bottom(borderSpec)
+                  background: BorderSurface {
+                    color: Style.controlFill(pasteDraftArea.activeFocus, false, root.contentForeground, Color.accent)
+                    borderSpec: pasteDraftArea.borderSpec
+                    radius: Style.cornerRadius
+                  }
+                  onTextChanged: root.pasteDraftData = text
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Rectangle {
+                    width: Style.space(96)
+                    height: Style.space(28)
+                    radius: Style.cornerRadius
+                    color: root.pasteDraftPublic ? Color.accent : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.1)
+                    Text { anchors.centerIn: parent; text: root.pasteDraftPublic ? "公开" : "私密"; color: root.pasteDraftPublic ? Color.background : root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.pasteDraftPublic = !root.pasteDraftPublic }
+                  }
+                  Rectangle {
+                    width: Style.space(120)
+                    height: Style.space(42)
+                    radius: Style.cornerRadius
+                    color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.06)
+                    Image { anchors.fill: parent; anchors.margins: Style.space(3); fillMode: Image.PreserveAspectFit; source: root.pasteCaptchaImage; cache: false }
+                    Text { anchors.centerIn: parent; visible: root.pasteCaptchaImage === ""; text: pasteCaptchaProc.running ? "读取中…" : "点此获取验证码"; color: Qt.darker(root.contentForeground, 1.5); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.refreshPasteCaptcha() }
+                  }
+                  TextField {
+                    width: Style.space(130)
+                    placeholderText: "验证码"
+                    text: root.pasteCaptchaCode
+                    foreground: root.contentForeground
+                    font.family: root.contentFontFamily
+                    onTextChanged: root.pasteCaptchaCode = text
+                  }
+                  Rectangle {
+                    readonly property bool ready: !root.pasteSaving && root.pasteCaptchaReady
+                    width: Style.space(88)
+                    height: Style.space(34)
+                    radius: Style.cornerRadius
+                    color: ready ? Color.accent : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.14)
+                    Text { anchors.centerIn: parent; text: root.pasteSaving ? "处理中…" : (root.pasteComposerMode === "edit" ? "保存" : "创建"); color: parent.ready ? Color.background : Qt.darker(root.contentForeground, 1.3); font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.submitPasteWrite() }
+                  }
+                  Text {
+                    width: Math.max(Style.space(60), parent.width - Style.space(96) - Style.space(120) - Style.space(130) - Style.space(88) - Style.space(40))
+                    anchors.verticalCenter: parent.verticalCenter
+                    elide: Text.ElideRight
+                    text: root.pasteWriteStatus
+                    color: root.pasteWriteStatus.indexOf("失败") >= 0 ? Color.urgent : Qt.darker(root.contentForeground, 1.5)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
               }
             }
 
@@ -4364,6 +4598,13 @@ Panel {
                   color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
                   Text { anchors.centerIn: parent; text: "复制链接"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
                   MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.copyToClipboard("https://www.luogu.com.cn/paste/" + root.pasteDetailId) }
+                }
+                Rectangle {
+                  width: Style.space(64); height: Style.space(28); radius: Style.cornerRadius
+                  visible: root.pasteDetail !== null && root.pasteDetail.canEdit
+                  color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                  Text { anchors.centerIn: parent; text: "编辑"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.startPasteEdit() }
                 }
                 Rectangle {
                   width: Style.space(120); height: Style.space(28)

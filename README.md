@@ -529,7 +529,48 @@ them, opens one (monospace, selectable), copies the body or the `/paste/<id>` li
 into the system clipboard (a hidden `QQC.TextArea` + `selectAll()/copy()` — verified
 by reading the clipboard back with `wl-paste`).
 
-**Creating one is not implemented" — the write route could not be found.** `/paste`
+### Writing to a paste: the routes come from `/_lfe/config`, not from the docs
+
+The community API docs (`0f-0b.github.io/luogu-api-docs/pastes`) say creation is
+`POST /paste/new`. **That route is gone** — the live server answers
+`405 Method Not Allowed (Allow: GET)`, and so does `/paste/<id>` for every write
+verb. The authoritative list is Luogu's own front-end config:
+
+```
+GET /_lfe/config   →   route.paste.new  = /paste/new
+                       route.paste.create = /paste/_new      ← 真正的创建接口
+                       route.paste.edit = /paste/_edit
+                       route.paste.batch_operate = /paste/_batop?method=…
+                       route.paste.list = /paste
+                       route.paste.show = /paste/{id}
+```
+
+`route.*` maps every route name to its path (it also confirms, e.g.,
+`route.api.problem.submit = /fe/api/problem/submit/{pid}` and
+`route.api.verify.captcha = /api/verify/captcha`), which makes it a far better
+discovery tool than guessing paths. Writing is then:
+
+| action | request | body | notes |
+|---|---|---|---|
+| 新建 | `POST /paste/_new` | `{data, public, captcha}` | returns `{id}`; **needs a captcha** |
+| 编辑 | `POST /paste/_edit` | `{id, data, public, captcha}` | returns `{id}` |
+| 删除 | `POST /paste/_batop?method=…` | `{ids: [...]}` | the `method` value is never validated before the captcha, so it cannot be discovered safely — **not implemented** rather than guessed |
+
+The captcha here is the **new** system (`/lg4/captcha`, exception
+`CaptchaChallengeException`) and is *not* the one submissions use
+(`/api/verify/captcha`, `InvalidCaptchaException`) — different endpoints, verified
+by the exception class each route raises. The payload key is `captcha`: sending
+`{"captcha": {"code": "x"}}` answers
+`Input value "captcha" contains a non-scalar value`, which is how the field name
+was confirmed rather than guessed.
+
+Verified through the widget: the captcha image loads (2699-byte data URL), a wrong
+code is reported as `失败：图形验证码错误`, the captcha refreshes itself afterwards,
+an edit against a nonexistent id answers `PasteBin not found` (so the request
+shape is right), and the paste count stayed at 34 throughout — no stray data.
+The final "type the real captcha" step is the user's.
+
+**Old note (superseded):** `/paste`
 answers `405 Method Not Allowed` to POST, and `POST/PUT/PATCH/DELETE` on
 `/paste/<id>` are all 405 too (only GET is allowed there), while ~35 guessed paths
 (`/api/paste`, `/api/paste/create`, `/api/paste/new`, `/fe/api/paste`, `/paste/save`,
