@@ -61,7 +61,11 @@ BarWidget {
   }
 
   Text {
-    visible: root.setting("showUnreadBadge", true) && panelLoader.item && (panelLoader.item.unreadMessages + panelLoader.item.unreadNotifications) > 0
+    // `omarchy bar set` 不带 --json 时会把值写成字符串（"false"），而字符串
+    // "false" 在 JS 里是真值，所以这里显式归一化。
+    visible: String(root.setting("showUnreadBadge", "true")) !== "false"
+      && panelLoader.item
+      && (panelLoader.item.unreadMessages + panelLoader.item.unreadNotifications) > 0
     text: {
       var total = panelLoader.item ? panelLoader.item.unreadMessages + panelLoader.item.unreadNotifications : 0
       return total > 99 ? "99+" : String(total)
