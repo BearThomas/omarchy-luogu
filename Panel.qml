@@ -78,6 +78,15 @@ Panel {
   property string userSpaceBackground: ""
   property bool userSpaceSaving: false
   property string userSpaceStatus: ""
+  // 云剪贴板（读；写接口尚未探到，见 README）
+  property var pasteItems: []
+  property int pasteCount: 0
+  property int pastePage: 1
+  property bool pasteLoading: false
+  property bool pasteHasMore: true
+  property var pasteDetail: null
+  property string pasteDetailId: ""
+  property bool pasteDetailLoading: false
   property bool tagTableLoading: false
   property string problemView: "list"
   property var problemList: []
@@ -599,6 +608,48 @@ Panel {
 
   function userSpaceProcRunning() { return userSpaceProc.running }
 
+  function pasteCommand(path) {
+    return ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/paste' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/$3\"", "luogu-paste", uid, clientId, path]
+  }
+
+  function loadPastes(append) {
+    if (uid === "" || clientId === "" || pasteListProc.running) return
+    var next = append ? root.pastePage + 1 : 1
+    pasteListProc.page = next
+    pasteListProc.append = append
+    pasteListProc.command = pasteCommand("paste?_contentOnly=1&page=" + next)
+    root.pasteLoading = true
+    pasteListProc.running = true
+  }
+
+  function openPasteDetail(id) {
+    var wanted = String(id || "").trim()
+    if (wanted === "") return
+    root.pasteDetailId = wanted
+    root.pasteDetail = null
+    root.pasteDetailLoading = true
+    pasteDetailProc.command = pasteCommand("paste/" + wanted + "?_contentOnly=1")
+    pasteDetailProc.running = true
+  }
+
+  function closePasteDetail() {
+    root.pasteDetailId = ""
+    root.pasteDetail = null
+    root.pasteDetailLoading = false
+  }
+
+  // 复制到系统剪贴板：借一个隐藏 TextArea 走 Qt 的剪贴板。
+  function copyToClipboard(value) {
+    clipboardHelper.text = String(value === undefined || value === null ? "" : value)
+    clipboardHelper.selectAll()
+    clipboardHelper.copy()
+  }
+
+  function pastePreview(item) {
+    var first = item.data.split("\n")[0]
+    return first.length > 0 ? first : "(空)"
+  }
+
   function accountDone() {
     accountPending = Math.max(0, accountPending - 1)
     if (accountPending === 0) accountLoading = false
@@ -608,6 +659,7 @@ Panel {
     detailPage = key
     if (key === "problems") { openProblemBank(); return }
     if (key === "account") { loadAccountSettings(); return }
+    if (key === "paste") { loadPastes(false); return }
     if (key !== "chat") return
     if (chatSelectedUid === "" && chatSessions.length > 0) openChatWith(chatSessions[0].uid, chatSessions[0].name, chatSessions[0].color)
     else if (chatSelectedUid !== "") loadChatMessages()
@@ -1330,6 +1382,44 @@ Panel {
 
   // 评测轮询：status 0/1 是 Waiting/Judging，出结果就停。
 
+
+  QQC.TextArea {
+    id: clipboardHelper
+    visible: false
+    width: 0
+    height: 0
+  }
+
+  Process {
+    id: pasteListProc
+    property int page: 1
+    property bool append: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = Model.parsePasteList(String(text || ""))
+        root.pasteItems = pasteListProc.append ? root.pasteItems.concat(parsed.items) : parsed.items
+        root.pasteCount = parsed.count
+        root.pastePage = pasteListProc.append ? pasteListProc.page : 1
+        root.pasteHasMore = parsed.items.length >= parsed.perPage
+        root.pasteLoading = false
+      }
+    }
+    onExited: function(exitCode) { root.pasteLoading = false }
+  }
+
+  Process {
+    id: pasteDetailProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = Model.parsePaste(String(text || ""))
+        root.pasteDetail = parsed.id === "" ? null : parsed
+        root.pasteDetailLoading = false
+      }
+    }
+    onExited: function(exitCode) { root.pasteDetailLoading = false }
+  }
 
   // 个人信息写回：走 stdin 传 base64（同交题那套，避免引号问题）
   Process {
@@ -2107,6 +2197,7 @@ Panel {
                 { key: "posts", label: "帖子" },
                 { key: "chat", label: "私信" },
                 { key: "notice", label: "通知" },
+                { key: "paste", label: "剪贴板" },
                 { key: "account", label: "设置" }
               ]
               delegate: Rectangle {
@@ -4152,6 +4243,206 @@ Panel {
 
           }
         }
+
+          // ---------------- 云剪贴板 ----------------
+          // 只能读：列出自己的剪贴板、看内容、复制链接。创建接口探不到
+          // （/paste 只接受 GET，PUT/PATCH/POST/DELETE 全 405，35 个候选路径全
+          // 404），需要从浏览器 devtools 抓一次真实请求才能接上。
+          Column {
+            visible: root.detailPage === "paste"
+            width: parent.width
+            spacing: Style.space(10)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(10)
+              Text {
+                width: parent.width - Style.space(200)
+                text: "云剪贴板" + (root.pasteCount > 0 ? "  " + root.pasteItems.length + " / " + root.pasteCount : "")
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.iconLarge
+                font.bold: true
+              }
+              Rectangle {
+                width: Style.space(64)
+                height: Style.space(28)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                Text { anchors.centerIn: parent; text: "刷新"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.loadPastes(false) }
+              }
+              Rectangle {
+                width: Style.space(120)
+                height: Style.space(28)
+                color: "transparent"
+                Text { anchors.centerIn: parent; text: "打开洛谷剪贴板"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally("https://www.luogu.com.cn/paste") }
+              }
+            }
+
+            // ---------------- 详情态 ----------------
+            Column {
+              visible: root.pasteDetailId !== ""
+              width: parent.width
+              spacing: Style.space(8)
+
+              Row {
+                width: parent.width
+                spacing: Style.space(10)
+                Rectangle {
+                  width: Style.space(92)
+                  height: Style.space(28)
+                  radius: Style.cornerRadius
+                  color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                  Text { anchors.centerIn: parent; text: "← 返回列表"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.closePasteDetail() }
+                }
+                Text {
+                  width: parent.width - Style.space(102)
+                  anchors.verticalCenter: parent.verticalCenter
+                  elide: Text.ElideRight
+                  text: "/paste/" + root.pasteDetailId
+                    + (root.pasteDetail ? ("   " + (root.pasteDetail.isPublic ? "公开" : "私密") + "   " + Model.formatChatTime(root.pasteDetail.time) + "   " + root.pasteDetail.data.length + " 字") : "")
+                  color: Qt.darker(root.contentForeground, 1.45)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Text {
+                visible: root.pasteDetailLoading
+                text: "正在读取…"
+                color: Qt.darker(root.contentForeground, 1.5)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Rectangle {
+                visible: root.pasteDetail !== null
+                width: parent.width
+                height: Style.space(320)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+                clip: true
+                Flickable {
+                  anchors.fill: parent
+                  anchors.margins: Style.space(8)
+                  clip: true
+                  contentWidth: width
+                  contentHeight: pasteBody.contentHeight
+                  boundsBehavior: Flickable.StopAtBounds
+                  QQC.TextArea {
+                    id: pasteBody
+                    width: parent.width
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: QQC.TextArea.WrapAnywhere
+                    text: root.pasteDetail ? root.pasteDetail.data : ""
+                    color: root.contentForeground
+                    selectionColor: Style.selectionFillFor(root.contentForeground, Color.accent)
+                    selectedTextColor: root.contentForeground
+                    font.family: "monospace"
+                    font.pixelSize: Style.font.bodySmall
+                    background: null
+                  }
+                }
+              }
+
+              Row {
+                visible: root.pasteDetail !== null
+                width: parent.width
+                spacing: Style.space(8)
+                Rectangle {
+                  width: Style.space(92); height: Style.space(28); radius: Style.cornerRadius
+                  color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                  Text { anchors.centerIn: parent; text: "复制内容"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (root.pasteDetail) root.copyToClipboard(root.pasteDetail.data) }
+                }
+                Rectangle {
+                  width: Style.space(92); height: Style.space(28); radius: Style.cornerRadius
+                  color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                  Text { anchors.centerIn: parent; text: "复制链接"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.copyToClipboard("https://www.luogu.com.cn/paste/" + root.pasteDetailId) }
+                }
+                Rectangle {
+                  width: Style.space(120); height: Style.space(28)
+                  color: "transparent"
+                  Text { anchors.centerIn: parent; text: "在浏览器打开"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally("https://www.luogu.com.cn/paste/" + root.pasteDetailId) }
+                }
+              }
+            }
+
+            // ---------------- 列表态 ----------------
+            Column {
+              visible: root.pasteDetailId === ""
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                visible: root.pasteItems.length === 0 && !root.pasteLoading
+                text: "暂无云剪贴板"
+                color: Qt.darker(root.contentForeground, 1.5)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Repeater {
+                model: root.pasteItems
+                delegate: Rectangle {
+                  required property var modelData
+                  width: parent.width
+                  height: Style.space(46)
+                  radius: Style.cornerRadius
+                  color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+                  Column {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Style.space(10)
+                    anchors.rightMargin: Style.space(10)
+                    spacing: Style.space(2)
+                    Row {
+                      width: parent.width
+                      spacing: Style.space(8)
+                      Text { width: Style.space(96); text: "/" + modelData.id; color: Color.accent; font.family: "monospace"; font.pixelSize: Style.font.caption }
+                      Text { width: Style.space(44); text: modelData.isPublic ? "公开" : "私密"; color: Qt.darker(root.contentForeground, 1.5); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                      Text {
+                        width: parent.width - Style.space(96) - Style.space(44) - Style.space(20)
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
+                        text: Model.formatChatTime(modelData.updateAt > modelData.time ? modelData.updateAt : modelData.time) + "   " + modelData.data.length + " 字"
+                        color: Qt.darker(root.contentForeground, 1.55)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                    Text {
+                      width: parent.width
+                      elide: Text.ElideRight
+                      text: root.pastePreview(modelData)
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                  }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openPasteDetail(modelData.id) }
+                }
+              }
+
+              Rectangle {
+                readonly property bool hasItems: root.pasteItems.length > 0
+                visible: hasItems && (root.pasteHasMore || root.pasteLoading)
+                width: parent.width
+                height: Style.space(30)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.07)
+                Text { anchors.centerIn: parent; text: root.pasteLoading ? "读取中…" : "加载更多"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.loadPastes(true) }
+              }
+            }
+          }
 
           // ---------------- 洛谷账号设置（只读）----------------
           // 奖项认证 / 账号安全 / 第三方绑定，三段都来自 /user/setting* 的 JSON。

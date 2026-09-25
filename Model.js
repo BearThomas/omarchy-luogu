@@ -1624,6 +1624,54 @@ function parseAccountBindings(raw) {
   }
 }
 
+// --- 云剪贴板（paste）---------------------------------------------------------
+// GET /paste?_contentOnly=1&page=N —— 内容字段名就叫 data（不是 content）。
+function parsePasteList(raw) {
+  var empty = { count: 0, perPage: 10, items: [] }
+  try {
+    var root = typeof raw === "string" ? JSON.parse(raw) : (raw || {})
+    var data = root.data || {}
+    var pastes = data.pastes || {}
+    var items = []
+    if (Array.isArray(pastes.result)) {
+      pastes.result.forEach(function(item) {
+        items.push({
+          id: textOr(item.id, ""),
+          time: numberOr(item.time, 0),
+          updateAt: numberOr(item.updateAt, 0),
+          isPublic: item.public === true,
+          data: textOr(item.data, ""),
+          author: textOr(item.user && item.user.name, "")
+        })
+      })
+    }
+    return { count: numberOr(pastes.count, 0), perPage: numberOr(pastes.perPage, 10), items: items }
+  } catch (error) {
+    return empty
+  }
+}
+
+// GET /paste/<id>?_contentOnly=1
+function parsePaste(raw) {
+  var empty = { id: "", data: "", time: 0, updateAt: 0, isPublic: false, canEdit: false, author: "" }
+  try {
+    var root = typeof raw === "string" ? JSON.parse(raw) : (raw || {})
+    var data = root.data || {}
+    var paste = data.paste || {}
+    return {
+      id: textOr(paste.id, ""),
+      data: textOr(paste.data, ""),
+      time: numberOr(paste.time, 0),
+      updateAt: numberOr(paste.updateAt, 0),
+      isPublic: paste.public === true,
+      canEdit: data.canEdit === true,
+      author: textOr(paste.user && paste.user.name, "")
+    }
+  } catch (error) {
+    return empty
+  }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     difficultyName: difficultyName,
@@ -1642,6 +1690,8 @@ if (typeof module !== "undefined") {
     parseArticle: parseArticle,
     utf8Base64: utf8Base64,
     latexToHtml: latexToHtml,
+    parsePasteList: parsePasteList,
+    parsePaste: parsePaste,
     parsePrizeSettings: parsePrizeSettings,
     parseAccountSecurity: parseAccountSecurity,
     parseAccountBindings: parseAccountBindings,

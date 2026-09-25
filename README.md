@@ -453,6 +453,30 @@ Also supported on the problem page: the per-problem discussion list
 (`/discuss?forum=<pid>`, 30 per page) and a thread view with Markdown-rendered
 replies, paginated the same way as the 帖子 page.
 
+## 云剪贴板 (paste)
+
+Read side, fully mapped:
+
+| what | endpoint |
+|---|---|
+| my pastes | `GET /paste?_contentOnly=1&page=N` → `data.pastes{count, perPage: 10, result: [{id, user, time, public, updateAt, data}]}` |
+| one paste | `GET /paste/<id>?_contentOnly=1` → `data.paste{…same fields…}` plus `data.canEdit` |
+
+The content field is called **`data`** (not `content`), the ids are 8-char slugs
+(`3g3b7g16`) and pagination works the same way as the feeds. The 剪贴板 page lists
+them, opens one (monospace, selectable), copies the body or the `/paste/<id>` link
+into the system clipboard (a hidden `QQC.TextArea` + `selectAll()/copy()` — verified
+by reading the clipboard back with `wl-paste`).
+
+**Creating one is not implemented" — the write route could not be found.** `/paste`
+answers `405 Method Not Allowed` to POST, and `POST/PUT/PATCH/DELETE` on
+`/paste/<id>` are all 405 too (only GET is allowed there), while ~35 guessed paths
+(`/api/paste`, `/api/paste/create`, `/api/paste/new`, `/fe/api/paste`, `/paste/save`,
+`/api/cloudpaste`, …) are all 404. The page HTML cannot help either: it answers the
+same 302 self-loop as `/user/setting` for non-browser clients, so its JS bundle —
+which would name the route — is unreadable. One devtools capture of a real "create"
+request settles it.
+
 ## 洛谷账号设置 (read-only)
 
 Three GET endpoints back the 设置 page in the sidebar:
