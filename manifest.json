@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "id": "bearthomas.luogu",
+  "name": "Luogu",
+  "version": "0.1.0",
+  "author": "BearThomas",
+  "license": "MIT",
+  "description": "A native Omarchy bar widget for Luogu account and contest information.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Luogu",
+    "description": "Luogu account, Guzhi and contest rating panel.",
+    "category": "Info",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "刷新间隔（秒）",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300,
+        "description": "自动刷新账号/比赛/犇犇/私信数据的间隔。"
+      },
+      {
+        "key": "iconText",
+        "type": "string",
+        "label": "状态栏图标文字",
+        "defaultValue": "洛",
+        "description": "状态栏上显示的字符，默认「洛」。"
+      },
+      {
+        "key": "showUnreadBadge",
+        "type": "boolean",
+        "label": "显示未读角标",
+        "defaultValue": true,
+        "description": "私信 + 通知的未读数角标。"
+      },
+      {
+        "key": "markdownBlockLimit",
+        "type": "integer",
+        "label": "Markdown 渲染上限（块）",
+        "min": 20,
+        "max": 600,
+        "step": 20,
+        "defaultValue": 120,
+        "description": "帖子/题面一次最多渲染多少块，超出部分折叠成「展开」按钮。"
+      },
+      {
+        "key": "defaultLanguage",
+        "type": "enum",
+        "label": "默认提交语言",
+        "options": [
+          "C++14 (GCC 9)",
+          "C++17",
+          "C++20",
+          "C++23",
+          "C++98",
+          "C++11",
+          "C",
+          "Python 3",
+          "PyPy 3",
+          "Java 8",
+          "Java 21",
+          "Rust",
+          "Go",
+          "Haskell",
+          "OCaml"
+        ],
+        "defaultValue": "C++14 (GCC 9)",
+        "description": "题目没有历史提交记录时用它作为默认语言。"
+      }
+    ]
+  }
+}
