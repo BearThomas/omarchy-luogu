@@ -550,6 +550,21 @@ replies, paginated the same way as the 帖子 page.
 
 ### Layout
 
+One view control (视图) with three states — 并排 (side by side), 题面 (statement
+only) and 提交代码 (code only) — and **the statement and the code pane each exist
+exactly once**; the control only reallocates their widths. That matters: an earlier
+version instantiated the same two `Component`s from four `Loader`s (one pair per
+layout), and the window's code pane came out with `visible: false`, so the code and
+its 提交 button were unreachable no matter what was clicked. One instance per pane
+removes that whole class of failure.
+
+并排 needs 880 px of panel width and is greyed out below it, falling back to 题面:
+洛谷中心's 题库 page only has ~764 px (the sidebar takes the rest), and splitting
+that squeezes the statement into a 336 px strip. Measured after the fix — problem
+window: `stmtPane=true@602x620 codePane=true@766x620`; 题库 page:
+`stmtPane=true@764x648 codePane=false`; 提交代码 in the window:
+`codePane=true@1380x452`.
+
 The problem window opens in **split mode**: statement on the left, code on the
 right, and the local sample results directly under the code, at 1420×900. The
 左右分栏 / 标签页 toggle switches back to the tabbed layout.
