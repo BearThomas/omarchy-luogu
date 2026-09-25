@@ -51,6 +51,8 @@ Column {
   property var record: null
   property bool polling: false
   // 本地跑样例（不联网、不产生提交记录）
+  // split = 左题面 / 右代码+样例；tabs = 原来的标签页
+  property string layoutMode: "split"
   property var sampleRun: null
   property bool sampleRunning: false
   property string sampleStatus: ""
@@ -73,6 +75,7 @@ Column {
   signal requestTagTable()
 
   onPidChanged: if (root.pid !== "" && root.fetchDetail) root.load()
+  onLayoutModeChanged: if (root.layoutMode === "split" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
   onPreloadedDetailChanged: root.adoptPreloaded()
   Component.onCompleted: root.adoptPreloaded()
 
@@ -105,6 +108,7 @@ Column {
     }
     root.languageId = preferred
     root.code = parsed.lastCode
+    if (root.layoutMode === "split" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
   }
 
   function load() {
@@ -458,386 +462,487 @@ Column {
     font.pixelSize: Style.font.caption
   }
 
+  // 布局切换：左右分栏（题面 | 代码 + 样例）或标签页
   Row {
     width: parent.width
     spacing: Style.space(8)
+    Text {
+      anchors.verticalCenter: parent.verticalCenter
+      text: "布局"
+      color: Qt.darker(root.foreground, 1.5)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
     Repeater {
-      model: [{ key: "statement", label: "题面" }, { key: "submit", label: "提交代码" }]
+      model: [{ key: "split", label: "左右分栏" }, { key: "tabs", label: "标签页" }]
       delegate: Rectangle {
         required property var modelData
-        width: Style.space(92)
-        height: Style.space(28)
+        width: Style.space(86)
+        height: Style.space(26)
         radius: Style.cornerRadius
-        color: root.tab === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+        color: root.layoutMode === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
         Text {
           anchors.centerIn: parent
           text: modelData.label
-          color: root.tab === modelData.key ? Color.background : root.foreground
+          color: root.layoutMode === modelData.key ? Color.background : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }
         MouseArea {
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: {
-            root.tab = modelData.key
-            if (modelData.key === "submit" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
-          }
+          onClicked: root.layoutMode = modelData.key
         }
       }
     }
   }
 
-  MarkdownView {
-    visible: root.tab === "statement" && !root.loading
-    width: parent.width
-    blockLimit: root.markdownBlockLimit
-    markdown: root.detail ? Model.problemStatementMarkdown(root.detail) : ""
-    foreground: root.foreground
-    accentColor: root.accentColor
-    fontFamily: root.fontFamily
-    basePixelSize: Style.font.bodySmall
-  }
 
-  Column {
-    visible: root.tab === "submit"
-    width: parent.width
-    spacing: Style.space(8)
-
-    Row {
-      width: parent.width
-      spacing: Style.space(10)
-      Dropdown {
-        width: Style.space(210)
-        label: "语言"
-        options: root.languageOptions
-        value: Model.languageName(root.languageId)
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onChanged: function(newValue) { root.pickLanguage(newValue) }
-      }
-      Toggle {
-        width: Style.space(150)
-        label: "O2 优化"
-        checked: root.enableO2
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onClicked: root.enableO2 = !root.enableO2
-      }
-      Rectangle {
-        readonly property bool ready: root.code.trim() !== "" && !root.submitting
-        width: Style.space(92)
-        height: Style.space(34)
-        radius: Style.cornerRadius
-        color: ready ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
-        Text {
-          anchors.centerIn: parent
-          text: root.submitting ? "评测中…" : "提交"
-          color: parent.ready ? Color.background : Qt.darker(root.foreground, 1.3)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-        }
-        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.submit() }
-      }
-      Rectangle {
-        readonly property bool ready: !root.sampleRunning && root.code.trim() !== ""
-        width: Style.space(104)
-        height: Style.space(34)
-        radius: Style.cornerRadius
-        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-        Text {
-          anchors.centerIn: parent
-          text: root.sampleRunning ? "运行中…" : "本地跑样例"
-          color: parent.ready ? root.foreground : Qt.darker(root.foreground, 1.4)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.runSamples() }
-      }
-      Rectangle {
-        width: Style.space(96)
-        height: Style.space(34)
-        radius: Style.cornerRadius
-        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-        Text { anchors.centerIn: parent; text: "用 nvim"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openInNvim() }
-      }
-      Text {
-        width: Math.max(Style.space(80), parent.width - Style.space(210) - Style.space(150) - Style.space(92) - Style.space(104) - Style.space(40))
-        anchors.verticalCenter: parent.verticalCenter
-        text: "Ctrl+Enter 提交 · Ctrl+R 跑样例 · Ctrl+/ 注释"
-        elide: Text.ElideRight
-        color: Qt.darker(root.foreground, 1.6)
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-    }
-
+    visible: root.layoutMode === "tabs"
     Row {
       width: parent.width
       spacing: Style.space(8)
-      Text {
-        anchors.verticalCenter: parent.verticalCenter
-        text: "验证码"
-        color: Qt.darker(root.foreground, 1.4)
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-      Rectangle {
-        width: Style.space(120)
-        height: Style.space(42)
-        radius: Style.cornerRadius
-        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-        Image {
-          anchors.fill: parent
-          anchors.margins: Style.space(3)
-          fillMode: Image.PreserveAspectFit
-          source: root.captchaImage
-          cache: false
+      Repeater {
+        model: [{ key: "statement", label: "题面" }, { key: "submit", label: "提交代码" }]
+        delegate: Rectangle {
+          required property var modelData
+          width: Style.space(92)
+          height: Style.space(28)
+          radius: Style.cornerRadius
+          color: root.tab === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+          Text {
+            anchors.centerIn: parent
+            text: modelData.label
+            color: root.tab === modelData.key ? Color.background : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.tab = modelData.key
+              if (modelData.key === "submit" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
+            }
+          }
         }
-        Text {
-          anchors.centerIn: parent
-          visible: root.captchaImage === ""
-          text: captchaProc.running ? "读取中…" : "点此获取"
-          color: Qt.darker(root.foreground, 1.5)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.loadCaptcha() }
-      }
-      TextField {
-        width: Style.space(140)
-        placeholderText: "验证码"
-        text: root.captchaCode
-        foreground: root.foreground
-        font.family: root.fontFamily
-        onTextChanged: root.captchaCode = text
-      }
-      Text {
-        anchors.verticalCenter: parent.verticalCenter
-        width: parent.width - Style.space(300)
-        text: "每次提交都需要验证码（点图片可换一张）"
-        color: Qt.darker(root.foreground, 1.6)
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
       }
     }
 
-    // 样例结果：本地跑出来的判定（不联网、不产生提交记录）
-    Rectangle {
-      visible: root.sampleStatus !== "" || root.sampleRun !== null
-      width: parent.width
-      height: sampleBody.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
+  // ---- 左右分栏：左题面、右代码、右下样例 ----
+  Row {
+    visible: root.layoutMode === "split"
+    width: parent.width
+    height: Style.space(620)
+    spacing: Style.space(12)
+
+    Column {
+      width: (parent.width - Style.space(12)) * 0.44
+      height: parent.height
+      spacing: Style.space(4)
+      Text {
+        text: "题面"
+        color: Qt.darker(root.foreground, 1.5)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+      Flickable {
+        width: parent.width
+        height: parent.height - Style.space(18)
+        clip: true
+        contentWidth: width
+        contentHeight: splitStatement.height
+        boundsBehavior: Flickable.StopAtBounds
+        Loader {
+          id: splitStatement
+          width: parent.width
+          sourceComponent: statementComponent
+          onLoaded: height = Qt.binding(function() { return item ? item.implicitHeight : 0 })
+        }
+      }
+    }
+
+    Loader {
+      id: splitCodePane
+      width: parent.width - (parent.width - Style.space(12)) * 0.44 - Style.space(12)
+      height: parent.height
+      sourceComponent: codePaneComponent
+    }
+  }
+
+
+  // ---- 标签页模式下的两块内容 ----
+  Loader {
+    active: root.layoutMode === "tabs" && root.tab === "statement" && !root.loading
+    width: parent.width
+    sourceComponent: statementComponent
+  }
+
+  Loader {
+    id: tabsCodePane
+    active: root.layoutMode === "tabs" && root.tab === "submit"
+    width: parent.width
+    sourceComponent: codePaneComponent
+  }
+
+
+  Component {
+    id: statementComponent
+
+      MarkdownView {
+        width: parent.width
+        blockLimit: root.markdownBlockLimit
+        markdown: root.detail ? Model.problemStatementMarkdown(root.detail) : ""
+        foreground: root.foreground
+        accentColor: root.accentColor
+        fontFamily: root.fontFamily
+        basePixelSize: Style.font.bodySmall
+      }
+  }
+
+  Component {
+    id: codePaneComponent
 
       Column {
-        id: sampleBody
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: Style.space(10)
-        spacing: Style.space(6)
-
-        Text {
+        width: parent.width
+        spacing: Style.space(8)
+    
+        Row {
           width: parent.width
-          text: root.sampleStatus
-          color: {
-            if (root.sampleRun === null) return root.foreground
-            if (root.sampleRun.compile && root.sampleRun.compile.ok === false) return Color.urgent
-            var results = root.sampleRun.results || []
-            for (var i = 0; i < results.length; i++) if (results[i].status !== "AC") return Color.urgent
-            return Color.accent
+          spacing: Style.space(10)
+          Dropdown {
+            width: Style.space(210)
+            label: "语言"
+            options: root.languageOptions
+            value: Model.languageName(root.languageId)
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onChanged: function(newValue) { root.pickLanguage(newValue) }
           }
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-        }
-
-        Text {
-          width: parent.width
-          visible: root.sampleRun !== null && root.sampleRun.compile && root.sampleRun.compile.ok === false && root.sampleRun.compile.message !== ""
-          text: root.sampleRun && root.sampleRun.compile ? root.sampleRun.compile.message : ""
-          wrapMode: Text.WrapAnywhere
-          maximumLineCount: 8
-          elide: Text.ElideRight
-          color: Color.urgent
-          font.family: "monospace"
-          font.pixelSize: Style.font.caption
-        }
-
-        Repeater {
-          model: root.sampleRun ? (root.sampleRun.results || []) : []
-          delegate: Column {
-            required property var modelData
-            width: sampleBody.width
-            spacing: Style.space(4)
+          Toggle {
+            width: Style.space(150)
+            label: "O2 优化"
+            checked: root.enableO2
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.enableO2 = !root.enableO2
+          }
+          Rectangle {
+            readonly property bool ready: root.code.trim() !== "" && !root.submitting
+            width: Style.space(92)
+            height: Style.space(34)
+            radius: Style.cornerRadius
+            color: ready ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
             Text {
-              width: parent.width
-              text: "样例 " + modelData.index + "   " + modelData.status + "   " + modelData.timeMs + "ms"
-              color: modelData.status === "AC" ? Color.accent : Color.urgent
+              anchors.centerIn: parent
+              text: root.submitting ? "评测中…" : "提交"
+              color: parent.ready ? Color.background : Qt.darker(root.foreground, 1.3)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.submit() }
+          }
+          Rectangle {
+            readonly property bool ready: !root.sampleRunning && root.code.trim() !== ""
+            width: Style.space(104)
+            height: Style.space(34)
+            radius: Style.cornerRadius
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+            Text {
+              anchors.centerIn: parent
+              text: root.sampleRunning ? "运行中…" : "本地跑样例"
+              color: parent.ready ? root.foreground : Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              font.bold: true
             }
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-              visible: modelData.status === "WA"
-              Column {
-                width: (parent.width - Style.space(8)) / 2
-                spacing: 2
-                Text { text: "期望输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                Text { width: parent.width; text: modelData.expected; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
-              }
-              Column {
-                width: (parent.width - Style.space(8)) / 2
-                spacing: 2
-                Text { text: "实际输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                Text { width: parent.width; text: modelData.stdout === "" ? "(空)" : modelData.stdout; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
-              }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.runSamples() }
+          }
+          Rectangle {
+            width: Style.space(96)
+            height: Style.space(34)
+            radius: Style.cornerRadius
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+            Text { anchors.centerIn: parent; text: "用 nvim"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openInNvim() }
+          }
+          Text {
+            width: Math.max(Style.space(80), parent.width - Style.space(210) - Style.space(150) - Style.space(92) - Style.space(104) - Style.space(40))
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Ctrl+Enter 提交 · Ctrl+R 跑样例 · Ctrl+/ 注释"
+            elide: Text.ElideRight
+            color: Qt.darker(root.foreground, 1.6)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+    
+        Row {
+          width: parent.width
+          spacing: Style.space(8)
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "验证码"
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          Rectangle {
+            width: Style.space(120)
+            height: Style.space(42)
+            radius: Style.cornerRadius
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+            Image {
+              anchors.fill: parent
+              anchors.margins: Style.space(3)
+              fillMode: Image.PreserveAspectFit
+              source: root.captchaImage
+              cache: false
             }
             Text {
+              anchors.centerIn: parent
+              visible: root.captchaImage === ""
+              text: captchaProc.running ? "读取中…" : "点此获取"
+              color: Qt.darker(root.foreground, 1.5)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.loadCaptcha() }
+          }
+          TextField {
+            width: Style.space(140)
+            placeholderText: "验证码"
+            text: root.captchaCode
+            foreground: root.foreground
+            font.family: root.fontFamily
+            onTextChanged: root.captchaCode = text
+          }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - Style.space(300)
+            text: "每次提交都需要验证码（点图片可换一张）"
+            color: Qt.darker(root.foreground, 1.6)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+        }
+    
+        // 样例结果：本地跑出来的判定（不联网、不产生提交记录）
+        Rectangle {
+          visible: root.sampleStatus !== "" || root.sampleRun !== null
+          width: parent.width
+          height: sampleBody.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
+    
+          Column {
+            id: sampleBody
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(10)
+            spacing: Style.space(6)
+    
+            Text {
               width: parent.width
-              visible: modelData.status === "RE" && modelData.stderr !== ""
-              text: modelData.stderr
+              text: root.sampleStatus
+              color: {
+                if (root.sampleRun === null) return root.foreground
+                if (root.sampleRun.compile && root.sampleRun.compile.ok === false) return Color.urgent
+                var results = root.sampleRun.results || []
+                for (var i = 0; i < results.length; i++) if (results[i].status !== "AC") return Color.urgent
+                return Color.accent
+              }
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+    
+            Text {
+              width: parent.width
+              visible: root.sampleRun !== null && root.sampleRun.compile && root.sampleRun.compile.ok === false && root.sampleRun.compile.message !== ""
+              text: root.sampleRun && root.sampleRun.compile ? root.sampleRun.compile.message : ""
               wrapMode: Text.WrapAnywhere
-              maximumLineCount: 4
+              maximumLineCount: 8
               elide: Text.ElideRight
               color: Color.urgent
               font.family: "monospace"
               font.pixelSize: Style.font.caption
             }
+    
+            Repeater {
+              model: root.sampleRun ? (root.sampleRun.results || []) : []
+              delegate: Column {
+                required property var modelData
+                width: sampleBody.width
+                spacing: Style.space(4)
+                Text {
+                  width: parent.width
+                  text: "样例 " + modelData.index + "   " + modelData.status + "   " + modelData.timeMs + "ms"
+                  color: modelData.status === "AC" ? Color.accent : Color.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  visible: modelData.status === "WA"
+                  Column {
+                    width: (parent.width - Style.space(8)) / 2
+                    spacing: 2
+                    Text { text: "期望输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    Text { width: parent.width; text: modelData.expected; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+                  }
+                  Column {
+                    width: (parent.width - Style.space(8)) / 2
+                    spacing: 2
+                    Text { text: "实际输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    Text { width: parent.width; text: modelData.stdout === "" ? "(空)" : modelData.stdout; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+                  }
+                }
+                Text {
+                  width: parent.width
+                  visible: modelData.status === "RE" && modelData.stderr !== ""
+                  text: modelData.stderr
+                  wrapMode: Text.WrapAnywhere
+                  maximumLineCount: 4
+                  elide: Text.ElideRight
+                  color: Color.urgent
+                  font.family: "monospace"
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  width: parent.width
+                  visible: modelData.status === "TLE"
+                  text: "超出时限（本地按 " + (root.detail && root.detail.timeLimit > 0 ? root.detail.timeLimit : 1000) + "ms + 2s 宽限）"
+                  color: Color.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+        }
+    
+        Text {
+          width: parent.width
+          visible: root.nvimStatus !== ""
+          elide: Text.ElideRight
+          text: root.nvimStatus + (root.externalPath !== "" ? "   " + root.externalPath : "")
+          color: Qt.darker(root.foreground, 1.5)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+    
+        // 代码编辑：CodeEditor（行号 + 语法高亮 + 自动缩进/括号补全）。
+        // 快捷键：Ctrl+Enter 提交、Ctrl+R 跑样例、Ctrl+/ 注释。
+        CodeEditor {
+          id: codeEditor
+          width: parent.width
+          height: Style.space(340)
+          text: root.code
+          language: Model.languageName(root.languageId)
+          foreground: root.foreground
+          accentColor: Color.accent
+          fontFamily: root.monoFamily
+          dark: root.isDarkTheme
+          onTextChanged: root.code = text
+          onSubmitted: root.submit()
+          onRunRequested: root.runSamples()
+        }
+    
+        Rectangle {
+          visible: root.submitStatus !== "" || root.record !== null
+          width: parent.width
+          height: verdictBody.implicitHeight + Style.space(20)
+          radius: Style.cornerRadius
+          color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
+    
+          Column {
+            id: verdictBody
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(10)
+            spacing: Style.space(6)
+    
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              Text {
+                visible: root.record !== null
+                text: root.record ? Model.verdictShort(root.record.status) : ""
+                color: root.record ? Model.verdictColor(root.record.status) : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+              Text {
+                width: parent.width - Style.space(72)
+                text: root.submitStatus + (root.rid > 0 ? "   #" + root.rid : "")
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+    
             Text {
               width: parent.width
-              visible: modelData.status === "TLE"
-              text: "超出时限（本地按 " + (root.detail && root.detail.timeLimit > 0 ? root.detail.timeLimit : 1000) + "ms + 2s 宽限）"
+              visible: root.record !== null
+              text: root.record
+                ? (Model.verdictName(root.record.status) + " · " + root.record.score + " 分 · "
+                   + root.record.time + "ms · " + root.record.memory + "KB · "
+                   + Model.languageName(root.record.language) + (root.record.enableO2 ? " (O2)" : ""))
+                : ""
+              wrapMode: Text.WordWrap
+              color: Qt.darker(root.foreground, 1.45)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+    
+            Text {
+              width: parent.width
+              visible: root.record !== null && !root.record.compileSuccess
+              text: root.record ? ("编译错误：" + root.record.compileMessage) : ""
+              wrapMode: Text.WordWrap
               color: Color.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
-          }
-        }
-      }
-    }
-
-    Text {
-      width: parent.width
-      visible: root.nvimStatus !== ""
-      elide: Text.ElideRight
-      text: root.nvimStatus + (root.externalPath !== "" ? "   " + root.externalPath : "")
-      color: Qt.darker(root.foreground, 1.5)
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
-    // 代码编辑：CodeEditor（行号 + 语法高亮 + 自动缩进/括号补全）。
-    // 快捷键：Ctrl+Enter 提交、Ctrl+R 跑样例、Ctrl+/ 注释。
-    CodeEditor {
-      id: codeEditor
-      width: parent.width
-      height: Style.space(340)
-      text: root.code
-      language: Model.languageName(root.languageId)
-      foreground: root.foreground
-      accentColor: Color.accent
-      fontFamily: root.monoFamily
-      dark: root.isDarkTheme
-      onTextChanged: root.code = text
-      onSubmitted: root.submit()
-      onRunRequested: root.runSamples()
-    }
-
-    Rectangle {
-      visible: root.submitStatus !== "" || root.record !== null
-      width: parent.width
-      height: verdictBody.implicitHeight + Style.space(20)
-      radius: Style.cornerRadius
-      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
-
-      Column {
-        id: verdictBody
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: Style.space(10)
-        spacing: Style.space(6)
-
-        Row {
-          width: parent.width
-          spacing: Style.space(8)
-          Text {
-            visible: root.record !== null
-            text: root.record ? Model.verdictShort(root.record.status) : ""
-            color: root.record ? Model.verdictColor(root.record.status) : root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
-            font.bold: true
-          }
-          Text {
-            width: parent.width - Style.space(72)
-            text: root.submitStatus + (root.rid > 0 ? "   #" + root.rid : "")
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-        }
-
-        Text {
-          width: parent.width
-          visible: root.record !== null
-          text: root.record
-            ? (Model.verdictName(root.record.status) + " · " + root.record.score + " 分 · "
-               + root.record.time + "ms · " + root.record.memory + "KB · "
-               + Model.languageName(root.record.language) + (root.record.enableO2 ? " (O2)" : ""))
-            : ""
-          wrapMode: Text.WordWrap
-          color: Qt.darker(root.foreground, 1.45)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-
-        Text {
-          width: parent.width
-          visible: root.record !== null && !root.record.compileSuccess
-          text: root.record ? ("编译错误：" + root.record.compileMessage) : ""
-          wrapMode: Text.WordWrap
-          color: Color.urgent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-
-        Repeater {
-          model: root.record ? root.record.subtasks : []
-          delegate: Column {
-            required property var modelData
-            width: verdictBody.width
-            spacing: Style.space(4)
-            Text {
-              width: parent.width
-              text: "子任务 " + modelData.id + "   " + Model.verdictShort(modelData.status) + "   " + modelData.score + " 分   " + modelData.time + "ms · " + modelData.memory + "KB"
-              color: Model.verdictColor(modelData.status)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Flow {
-              width: parent.width
-              spacing: Style.space(4)
-              Repeater {
-                model: modelData.testCases
-                delegate: Rectangle {
-                  required property var modelData
-                  width: Style.space(58)
-                  height: Style.space(18)
-                  radius: Style.space(3)
+    
+            Repeater {
+              model: root.record ? root.record.subtasks : []
+              delegate: Column {
+                required property var modelData
+                width: verdictBody.width
+                spacing: Style.space(4)
+                Text {
+                  width: parent.width
+                  text: "子任务 " + modelData.id + "   " + Model.verdictShort(modelData.status) + "   " + modelData.score + " 分   " + modelData.time + "ms · " + modelData.memory + "KB"
                   color: Model.verdictColor(modelData.status)
-                  Text {
-                    anchors.centerIn: parent
-                    text: "#" + modelData.id + " " + Model.verdictShort(modelData.status)
-                    color: Color.background
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Flow {
+                  width: parent.width
+                  spacing: Style.space(4)
+                  Repeater {
+                    model: modelData.testCases
+                    delegate: Rectangle {
+                      required property var modelData
+                      width: Style.space(58)
+                      height: Style.space(18)
+                      radius: Style.space(3)
+                      color: Model.verdictColor(modelData.status)
+                      Text {
+                        anchors.centerIn: parent
+                        text: "#" + modelData.id + " " + Model.verdictShort(modelData.status)
+                        color: Color.background
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
                   }
                 }
               }
@@ -845,6 +950,6 @@ Column {
           }
         }
       }
-    }
   }
-}
+
+  }

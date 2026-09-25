@@ -548,6 +548,43 @@ replies, paginated the same way as the 帖子 page.
 
 ## The code editor, sample running and the nvim escape hatch
 
+### Layout
+
+The problem window opens in **split mode**: statement on the left, code on the
+right, and the local sample results directly under the code. The 左右分栏 / 标签页
+toggle switches back to the old tabbed layout (and the window is sized for the
+split view, 1420×900).
+
+### Alignment is a construction problem, not a tuning problem
+
+The caret drifting away from the text it is editing is the classic failure of the
+"highlight layer under a transparent editable layer" trick. Two rules keep them
+together, and both were learned the hard way:
+
+1. **Both layers must be the same QML type.** A `Text` for the highlighting and a
+   `TextArea` for editing lay out differently (different content offsets and, as
+   measured, a different line height: 18.5 by the font metrics versus 15 as the
+   editable control actually laid it out). Both layers are now `TextEdit`, so the
+   layout engine is literally the same one; `TextEdit` also supports
+   `cursorDelegate`, which is what draws the caret over transparent text.
+2. **RichText collapses runs of spaces**, so indentation vanished from the
+   highlighting layer and that text appeared shifted left. `Model.highlightCode`
+   now emits `&nbsp;` for spaces (and expands tabs to four), so the two layers
+   contain the same number of the same characters at the same positions.
+
+Verified by measurement rather than by eye: for an 8-line file both layers report
+`contentHeight = 120` with `topPadding = leftPadding = 0`.
+
+### Autocompletion
+
+Typing offers up to eight candidates under the caret: keywords and types for the
+current language plus snippets, each with its own **trigger** word (so `mai`
+offers `int main() {`, `bi` offers `#include <bits/stdc++.h>`, and `for` offers the
+whole loop — the plain `for` keyword is dropped once it has been typed, because
+the snippet is what is useful there). `↑`/`↓` select, `Enter`/`Tab` accept, `Esc`
+dismisses, `Ctrl+Space` re-opens it. The candidate list lives in `Model.js`
+(`completionMatches`), so it is unit-testable with `node`.
+
 `CodeEditor.qml` is a hand-rolled editor, because QML ships nothing with syntax
 highlighting:
 

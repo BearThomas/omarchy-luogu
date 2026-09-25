@@ -1751,17 +1751,25 @@ function highlightCode(code, language, dark) {
       lineStart = false
       continue
     }
-    // 其它：逐字符，换行转 <br/>
+    // 空白成批处理（Tab 展开 4 空格、空格转 &nbsp;），其余逐字符，换行转 <br/>
+    match = /^[ \t]+/.exec(rest)
+    if (match) { out.push(preserveSpaces(match[0])); i += match[0].length; continue }
     var ch = source.charAt(i)
     if (ch === "\n") { out.push("<br/>"); lineStart = true; i += 1; continue }
-    out.push(escapeHtml(ch))
+    out.push(preserveSpaces(escapeHtml(ch)))
     i += 1
   }
   return out.join("")
 
+  // RichText 会像 HTML 一样折叠连续空格，缩进就会被吃掉、和可编辑层错位，
+  // 所以空格一律写成 &nbsp;（等宽字体下宽度相同），Tab 展开成 4 个空格。
+  function preserveSpaces(escaped) {
+    return escaped.replace(/\t/g, "    ").replace(/ /g, "&nbsp;")
+  }
+
   function span(color, text) {
     // 里面的换行同样要转 <br/>，并保持同样数量的行
-    var escaped = escapeHtml(text).replace(/\n/g, "<br/>")
+    var escaped = preserveSpaces(escapeHtml(text)).replace(/\n/g, "<br/>")
     return '<span style="color:' + color + ';">' + escaped + "</span>"
   }
 }
@@ -1776,6 +1784,79 @@ function parsePasteWrite(body) {
   } catch (error) {
     return { id: "", message: "" }
   }
+}
+
+// 编辑器自动补全用的词表。片段带 trigger（触发词），否则 "int main() {" 只能靠
+// "int" 匹配到，打 "mai" 就出不来了。
+var CODE_SNIPPETS_CPP = [
+  ["#include <bits/stdc++.h>", "bits"], ["using namespace std;", "using"], ["int main() {", "main"],
+  ["return 0;", "return"], ["for (int i = 0; i < n; i++) {", "for"], ["while (cin >> n) {", "while"],
+  ["if (x > y) {", "if"], ["else {", "else"], ["vector<int> a(n);", "vector"],
+  ["sort(a.begin(), a.end());", "sort"], ["cout << ans << \"\\n\";", "cout"],
+  ["cin >> n >> m;", "cin"], ["long long ans = 0;", "long"], ["const int MOD = 1e9 + 7;", "mod"],
+  ["ios::sync_with_stdio(false);", "sync"], ["cin.tie(nullptr);", "tie"],
+  ["memset(a, 0, sizeof(a));", "memset"], ["struct Node {", "struct"], ["template <typename T>", "template"],
+  ["pair<int, int> p;", "pair"], ["map<int, int> mp;", "map"], ["set<int> st;", "set"],
+  ["queue<int> q;", "queue"], ["priority_queue<int> pq;", "priority"],
+  ["int gcd(int a, int b) {", "gcd"], ["bool check(int x) {", "check"], ["int n, m;", "int n"],
+  ["double x;", "double"], ["char c;", "char"]
+]
+var CODE_SNIPPETS_PY = [
+  ["def solve():", "def"], ["if __name__ == \"__main__\":", "main"], ["import sys", "import"],
+  ["from collections import defaultdict", "collections"], ["for i in range(n):", "for"],
+  ["while True:", "while"], ["print(ans)", "print"], ["input = sys.stdin.readline", "readline"],
+  ["a, b = map(int, input().split())", "map"], ["n = int(input())", "n"], ["ans = 0", "ans"],
+  ["elif ", "elif"], ["with open(0) as f:", "open"], ["dp = [0] * (n + 1)", "dp"],
+  ["sys.setrecursionlimit(1 << 20)", "setrecursionlimit"]
+]
+
+function codeCompletions(language) {
+  var python = /python|pypy/i.test(String(language || ""))
+  var words = python ? CODE_PY_KEYWORDS.concat(CODE_PY_BUILTINS) : CODE_KEYWORDS.concat(CODE_TYPES)
+  var snippets = python ? CODE_SNIPPETS_PY : CODE_SNIPPETS_CPP
+  var seen = {}
+  var out = []
+  words.forEach(function(word) {
+    if (seen[word] === true) return
+    seen[word] = true
+    out.push({ text: word, trigger: word, snippet: false })
+  })
+  snippets.forEach(function(pair) {
+    // 按 text 去重而不是 trigger：关键字 for 和片段 "for (int i = ...) {" 的
+    // trigger 都是 for，按 trigger 去重会把片段吃掉。
+    var key = "snippet:" + pair[0]
+    if (seen[key] === true) return
+    seen[key] = true
+    out.push({ text: pair[0], trigger: pair[1], snippet: true })
+  })
+  return out
+}
+
+function completionMatches(language, prefix) {
+  var wanted = String(prefix || "").toLowerCase()
+  if (wanted === "") return []
+  var out = []
+  codeCompletions(language).forEach(function(item) {
+    var trigger = item.trigger.toLowerCase()
+    var text = item.text.toLowerCase()
+    if (trigger.indexOf(wanted) === 0 || text.indexOf(wanted) === 0) out.push(item)
+  })
+  // 短的排前面，片段排在纯关键字后面，结果稳定
+  // 和已输入的词完全相同的候选（例如已经打完 for 又提示 for）没有意义，去掉；
+  // 但同名 trigger 的片段要留着，这样打 for 能直接补出整个循环。
+  out = out.filter(function(item) { return item.text.toLowerCase() !== wanted })
+  out.sort(function(a, b) {
+    if (a.snippet !== b.snippet) return a.snippet ? 1 : -1
+    return a.text.length - b.text.length
+  })
+  return out.slice(0, 8)
+}
+
+// 光标前那个词，用来过滤补全列表
+function wordBefore(text, position) {
+  var before = String(text || "").slice(0, Math.max(0, position))
+  var match = /[A-Za-z_][A-Za-z0-9_]*$/.exec(before)
+  return match ? match[0] : ""
 }
 
 if (typeof module !== "undefined") {
@@ -1797,6 +1878,9 @@ if (typeof module !== "undefined") {
     utf8Base64: utf8Base64,
     latexToHtml: latexToHtml,
     highlightCode: highlightCode,
+    codeCompletions: codeCompletions,
+    completionMatches: completionMatches,
+    wordBefore: wordBefore,
     escapeHtml: escapeHtml,
     parsePasteList: parsePasteList,
     parsePasteWrite: parsePasteWrite,

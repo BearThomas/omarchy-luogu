@@ -5045,7 +5045,7 @@ Panel {
       if (attempts === 1 && root.detailTargetWorkspace !== "")
         Hyprland.dispatch('hl.dsp.window.move({ workspace = "' + root.detailTargetWorkspace + '", window = "' + selector + '", follow = false })')
       Hyprland.dispatch('hl.dsp.window.float({ action = "on", window = "' + selector + '" })')
-      Hyprland.dispatch('hl.dsp.window.resize({ x = 900, y = 760, relative = false, window = "' + selector + '" })')
+      Hyprland.dispatch('hl.dsp.window.resize({ x = 1420, y = 900, relative = false, window = "' + selector + '" })')
       if (attempts >= 2) {
         Hyprland.dispatch('hl.dsp.window.center({ window = "' + selector + '" })')
         if (attempts === 2) Hyprland.dispatch('hl.dsp.focus({ window = "' + selector + '" })')
@@ -5068,8 +5068,8 @@ Panel {
       title: "洛谷题目"
       visible: true
       color: Color.background
-      implicitWidth: 900
-      implicitHeight: 760
+      implicitWidth: 1420
+      implicitHeight: 900
       minimumSize: Qt.size(680, 520)
 
       onVisibleChanged: {
