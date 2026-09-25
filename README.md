@@ -1,9 +1,102 @@
 # Omarchy Luogu
 
-Native Omarchy Shell bar widget for Luogu. The first development version uses
-the same direct HTTP request pattern as `vscode-luogu`: `_uid` and
-`__client_id` cookies, the Omarchy/VS Code-compatible request headers, and
-CSRF-ready request handling.
+A native [Omarchy](https://omarchy.org) Shell bar widget for [Luogu](https://www.luogu.com.cn)
+(洛谷) — account overview, contests, the problem bank, the 犇犇 feed, posts, private
+messages, cloud clipboard and an in-panel code editor with local sample testing.
+No browser, no embedded web view: every request is a `curl` the shell runs itself.
+
+洛谷的 Omarchy 状态栏插件：账号概览、比赛、题库、犇犇、帖子、私信、云剪贴板，以及一个
+能本地跑样例的代码编辑器。
+
+## Preview
+
+The problem window with the editor and a local sample run:
+
+![The Luogu problem window with the code editor and a passing sample run](preview.png)
+
+The account overview (public profile data only — this account's):
+
+![The Luogu account overview: identity card, Guzhi, rating, awards and heatmap](preview-overview.png)
+
+## Features
+
+| | |
+|---|---|
+| 概览 | avatar, name in your Luogu colour, 认证 mark, 签名/简介, 咕值 + breakdown, 等级分 with its delta and last contest, 排名/关注/粉丝, 入坑天数, CCF/XCPC levels, 获奖, 26-week solving heatmap |
+| 比赛 | contest list (ongoing and finished) with a standalone detail window |
+| 题库 | multi-factor search (keyword/difficulty/tag, 505 tags, sortable), problem statements with Markdown + LaTeX, 题解 list and full articles, per-problem discussion board |
+| 交题 | language + O2 + captcha, then verdict polling with per-subtest results |
+| 编辑器 | line numbers, syntax highlighting, auto-indent, bracket completion, `Ctrl+Enter` submit, `Ctrl+R` run samples, `Ctrl+/` comment; 「用 nvim」 hands the buffer to nvim and syncs saves back |
+| 评测样例 | compiles and runs your code against the problem's samples **locally** (AC/WA/CE/TLE/RE with timings and diffs) — no submission, no waiting |
+| 犇犇 | the watching feed with names and colours, paging, and posting |
+| 帖子 | thread reading with in-panel Markdown rendering, replies, new posts |
+| 私信 | one conversation per user, user search by UID or name, infinite history |
+| 云剪贴板 | list, view, copy, create, edit and delete pastes |
+| 设置 | read your Luogu account settings (奖项认证 / 账号安全 / 第三方绑定) and edit 签名/简介/背景图 |
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/BearThomas/omarchy-luogu.git --enable
+```
+
+Then click the 洛 glyph in the bar (right section by default).
+
+### Requirements
+
+- Omarchy (Quattro) with Quickshell — the plugin is `bar-widget` kind.
+- `curl`, `jq`, `base64`, `sed` — every request goes through them.
+- `secret-tool` (libsecret) to store the session; without it the plugin falls back
+  to a `0600` file under `~/.local/state/omarchy/`.
+- Optional, only for 「本地跑样例」 and 「用 nvim」: `g++`/`gcc`/`clang++`, `python3`,
+  `java`, `node`, `rustc`, `go`, `fpc`, and `nvim` + `omarchy-launch-terminal`.
+
+### First run
+
+Open the panel and log in once — the plugin stores the `_uid` and `__client_id`
+cookies plus a scraped CSRF token and can then read and write on your behalf. It
+only ever talks to `www.luogu.com.cn`.
+
+## Settings
+
+Five settings, declared in `manifest.json` (`barWidget.schema`) and read from the
+widget's entry in `~/.config/omarchy/shell.json`. There is no schema editor in this
+Omarchy version, so set them with the CLI:
+
+```bash
+omarchy bar set bearthomas.luogu refreshIntervalSec 300
+omarchy bar set bearthomas.luogu iconText 洛
+omarchy bar set bearthomas.luogu showUnreadBadge true
+omarchy bar set bearthomas.luogu markdownBlockLimit 120
+omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
+```
+
+## Privacy and what it writes
+
+- **Credentials** live in `secret-tool` (or a `0600` file) and a small state file
+  at `~/.local/state/omarchy/luogu-session.json`. Nothing is sent anywhere except
+  `www.luogu.com.cn`.
+- **It never writes your Omarchy configuration.** Settings are read from
+  `shell.json`, never rewritten by the plugin.
+- Writes go only where you ask: submitting code, posting, replying, sending a
+  message, and creating/editing/deleting a paste — each behind its own button.
+- 「本地跑样例」 compiles and executes your code **on your machine** with your own
+  privileges, exactly like an IDE. It is never uploaded.
+- 「用 nvim」 writes the buffer to `/tmp/luogu-edit/<pid>.<ext>` and opens nvim in a
+  terminal; that directory is yours to delete.
+
+## Removal
+
+```bash
+omarchy plugin remove bearthomas.luogu          # removes the plugin folder
+rm -f ~/.local/state/omarchy/luogu-session.json # the saved session
+secret-tool clear service omarchy-luogu         # the stored credentials
+rm -rf /tmp/luogu-edit                          # scratch files, if any
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Development
 
