@@ -551,9 +551,17 @@ replies, paginated the same way as the 帖子 page.
 ### Layout
 
 The problem window opens in **split mode**: statement on the left, code on the
-right, and the local sample results directly under the code. The 左右分栏 / 标签页
-toggle switches back to the old tabbed layout (and the window is sized for the
-split view, 1420×900).
+right, and the local sample results directly under the code, at 1420×900. The
+左右分栏 / 标签页 toggle switches back to the tabbed layout.
+
+**The split layout is skipped when there is no room for it** (`splitLayout` is
+`layoutMode === "split" && width >= 880`). The same `ProblemPanel` is used by the
+题库 page inside 洛谷中心, where the sidebar leaves only ~764 px — splitting that
+into two columns squeezes the statement into a 336 px strip, which reads as "the
+problem is broken". Below the threshold the panel falls back to the tabbed layout
+and the statement gets its full width. Measured after the fix: 题库 page
+`panelW=764 splitLayout=false stmtW=764`, standalone window
+`splitLayout=true stmtPaneW=602`.
 
 ### Alignment is a construction problem, not a tuning problem
 

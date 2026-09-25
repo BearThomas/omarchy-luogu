@@ -51,8 +51,10 @@ Column {
   property var record: null
   property bool polling: false
   // 本地跑样例（不联网、不产生提交记录）
-  // split = 左题面 / 右代码+样例；tabs = 原来的标签页
+  // split = 左题面 / 右代码+样例；tabs = 标签页。宽度不够时自动退回标签页：
+  // 题库页在侧边栏右侧只有 700 多像素，硬分栏会把题面挤成一条。
   property string layoutMode: "split"
+  readonly property bool splitLayout: layoutMode === "split" && width >= Style.space(880)
   property var sampleRun: null
   property bool sampleRunning: false
   property string sampleStatus: ""
@@ -480,11 +482,11 @@ Column {
         width: Style.space(86)
         height: Style.space(26)
         radius: Style.cornerRadius
-        color: root.layoutMode === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+        color: (modelData.key === "split" ? root.splitLayout : !root.splitLayout) ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
         Text {
           anchors.centerIn: parent
           text: modelData.label
-          color: root.layoutMode === modelData.key ? Color.background : root.foreground
+          color: (modelData.key === "split" ? root.splitLayout : !root.splitLayout) ? Color.background : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }
@@ -498,7 +500,7 @@ Column {
   }
 
 
-    visible: root.layoutMode === "tabs"
+    visible: !root.splitLayout
     Row {
       width: parent.width
       spacing: Style.space(8)
@@ -531,7 +533,7 @@ Column {
 
   // ---- 左右分栏：左题面、右代码、右下样例 ----
   Row {
-    visible: root.layoutMode === "split"
+    visible: root.splitLayout
     width: parent.width
     height: Style.space(620)
     spacing: Style.space(12)
@@ -547,6 +549,7 @@ Column {
         font.pixelSize: Style.font.caption
       }
       Flickable {
+        id: splitStatementPane
         width: parent.width
         height: parent.height - Style.space(18)
         clip: true
@@ -573,14 +576,14 @@ Column {
 
   // ---- 标签页模式下的两块内容 ----
   Loader {
-    active: root.layoutMode === "tabs" && root.tab === "statement" && !root.loading
+    active: !root.splitLayout && root.tab === "statement" && !root.loading
     width: parent.width
     sourceComponent: statementComponent
   }
 
   Loader {
     id: tabsCodePane
-    active: root.layoutMode === "tabs" && root.tab === "submit"
+    active: !root.splitLayout && root.tab === "submit"
     width: parent.width
     sourceComponent: codePaneComponent
   }
