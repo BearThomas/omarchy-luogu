@@ -146,6 +146,20 @@ Item {
 
     Flickable {
       id: verticalFlick
+      // 滚轮调优（同「洛谷中心」窗口）：默认步进在触控板上太慢
+      property int wheelStep: 140
+      property real wheelPixelFactor: 3.2
+      WheelHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        onWheel: function(event) {
+          var step = event.pixelDelta.y !== 0
+            ? event.pixelDelta.y * verticalFlick.wheelPixelFactor
+            : event.angleDelta.y / 120 * Style.space(verticalFlick.wheelStep)
+          if (step === 0) return
+          var limit = Math.max(0, verticalFlick.contentHeight - verticalFlick.height)
+          verticalFlick.contentY = Math.max(0, Math.min(limit, verticalFlick.contentY - step))
+        }
+      }
       anchors.fill: parent
       anchors.margins: Style.space(6)
       clip: true

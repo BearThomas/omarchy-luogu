@@ -598,6 +598,23 @@ together, and both were learned the hard way:
 Verified by measurement rather than by eye: for an 8-line file both layers report
 `contentHeight = 120` with `topPadding = leftPadding = 0`.
 
+### Scrolling, chips and paging
+
+- Every scrollable surface in the plugin uses the same wheel tuning
+  (`wheelStep` 140, `wheelPixelFactor` 3.2). Omarchy sets the touchpad
+  `scroll_factor` to 0.4, so a `Flickable` left on the default step scrolls much
+  more slowly than the rest of the system; the statement pane and the editor were
+  the two that had been left out.
+- **Difficulty chips size themselves to their text**
+  (`Math.max(minWidth, label.implicitWidth + padding)`). They used to be fixed
+  (56 px in the problem header, 54 px in the 题库 list, 46 px in a contest's problem
+  list) and one of them additionally cut the name with `.slice(0, 4)` — so
+  「普及+/提高」 rendered as 「普及+/」 and the longer names
+  (「省选/NOI-」, 「NOI/NOI+/CTSC」) were clipped. Measured now:
+  「提高+/省选-」 → text 58 px, chip 70 px.
+- The 题库 list carries its 上一页/下一页 controls **both above and below** the list
+  — a page holds 50 problems, so the controls are a long scroll away otherwise.
+
 ### Autocompletion
 
 Typing offers up to eight candidates under the caret: keywords and types for the

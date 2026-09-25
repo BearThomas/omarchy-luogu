@@ -2394,8 +2394,8 @@ Panel {
         // 所以自己算步进：滚轮一格走 wheelStep 像素，触控板把已经缩水的
         // pixelDelta 乘回去（0.4 × 2.5 ≈ 1.0，即恢复到正常手感）。
         // 两个数字都可以直接调；内层 ListView（私信）会先消费滚轮事件，不受影响。
-        property int wheelStep: 96
-        property real wheelPixelFactor: 2.5
+        property int wheelStep: 140
+        property real wheelPixelFactor: 3.2
         WheelHandler {
           acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
           onWheel: function(event) {
@@ -3501,14 +3501,23 @@ Panel {
                   anchors.margins: Style.space(9)
                   spacing: Style.space(10)
                   Rectangle {
-                    width: Style.space(54)
+                    // 难度名长短差别很大（「入门」到「NOI/NOI+/CTSC」），固定宽度会截断
+                    id: problemDifficultyChip
+                    width: Math.max(Style.space(46), problemDifficultyLabel.implicitWidth + Style.space(12))
                     height: Style.space(20)
                     radius: Style.space(4)
                     color: Model.difficultyColor(modelData.difficulty)
-                    Text { anchors.centerIn: parent; text: Model.difficultyName(modelData.difficulty); color: Color.background; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                    Text {
+                      id: problemDifficultyLabel
+                      anchors.centerIn: parent
+                      text: Model.difficultyName(modelData.difficulty)
+                      color: Color.background
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                    }
                   }
                   Column {
-                    width: parent.width - Style.space(54) - Style.space(10) - Style.space(52) - Style.space(10)
+                    width: parent.width - problemDifficultyChip.width - Style.space(10) - Style.space(52) - Style.space(10)
                     spacing: Style.space(2)
                     Text { width: parent.width; elide: Text.ElideRight; text: modelData.pid + "  " + modelData.name; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
                     Text { width: parent.width; elide: Text.ElideRight; text: Model.tagNames(modelData.tags, root.tagTable).join(" · ") + (modelData.totalSubmit > 0 ? "   提交 " + Model.compactCount(modelData.totalSubmit) : ""); color: Qt.darker(root.contentForeground, 1.45); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
@@ -3525,6 +3534,36 @@ Panel {
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openProblem(modelData.pid) }
               }
             }
+
+            // 列表底部同样给一组翻页：题库一页 50 条，翻到末尾不用再滚回顶部
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              Text {
+                width: parent.width - Style.space(178)
+                text: "第 " + root.problemPage + " / " + root.problemPageCount + " 页 · 共 " + root.problemCount + " 题"
+                color: Qt.darker(root.contentForeground, 1.5)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Rectangle {
+                width: Style.space(80)
+                height: Style.space(26)
+                radius: Style.cornerRadius
+                color: root.problemPage > 1 ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : "transparent"
+                Text { anchors.centerIn: parent; text: "上一页"; color: root.problemPage > 1 ? root.contentForeground : Qt.darker(root.contentForeground, 1.9); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (root.problemPage > 1) root.searchProblems(root.problemPage - 1) }
+              }
+              Rectangle {
+                width: Style.space(80)
+                height: Style.space(26)
+                radius: Style.cornerRadius
+                color: root.problemPage < root.problemPageCount ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : "transparent"
+                Text { anchors.centerIn: parent; text: "下一页"; color: root.problemPage < root.problemPageCount ? root.contentForeground : Qt.darker(root.contentForeground, 1.9); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (root.problemPage < root.problemPageCount) root.searchProblems(root.problemPage + 1) }
+              }
+            }
+
           }
 
           // ---------------- 看题 ----------------
@@ -5083,8 +5122,8 @@ Panel {
         contentWidth: width
         contentHeight: problemBody.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
-        property int wheelStep: 96
-        property real wheelPixelFactor: 2.5
+        property int wheelStep: 140
+        property real wheelPixelFactor: 3.2
         WheelHandler {
           acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
           onWheel: function(event) {
@@ -5200,8 +5239,8 @@ Panel {
         contentWidth: width
         contentHeight: contestBody.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
-        property int wheelStep: 96
-        property real wheelPixelFactor: 2.5
+        property int wheelStep: 140
+        property real wheelPixelFactor: 3.2
         WheelHandler {
           acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
           onWheel: function(event) {
@@ -5293,13 +5332,22 @@ Panel {
                 spacing: Style.space(8)
                 Text { width: Style.space(26); text: modelData.no; color: Qt.darker(root.contentForeground, 1.5); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
                 Rectangle {
-                  width: Style.space(46)
+                  // 这里原来把名字截成 4 个字（「普及+/提高」变成「普及+/」），改成跟着文字宽度
+                  id: contestProblemDifficultyChip
+                  width: Math.max(Style.space(38), contestProblemDifficultyLabel.implicitWidth + Style.space(10))
                   height: Style.space(18)
                   radius: Style.space(3)
                   color: Model.difficultyColor(modelData.difficulty)
-                  Text { anchors.centerIn: parent; text: Model.difficultyName(modelData.difficulty).slice(0, 4); color: Color.background; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  Text {
+                    id: contestProblemDifficultyLabel
+                    anchors.centerIn: parent
+                    text: Model.difficultyName(modelData.difficulty)
+                    color: Color.background
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                  }
                 }
-                Text { width: parent.width - Style.space(26) - Style.space(46) - Style.space(60) - Style.space(24); elide: Text.ElideRight; text: modelData.pid + "  " + modelData.name; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
+                Text { width: parent.width - Style.space(26) - contestProblemDifficultyChip.width - Style.space(60) - Style.space(24); elide: Text.ElideRight; text: modelData.pid + "  " + modelData.name; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
                 Text { width: Style.space(60); horizontalAlignment: Text.AlignRight; text: modelData.accepted ? "已通过" : (modelData.submitted ? "尝试过" : (modelData.score > 0 ? modelData.score + " 分" : "")); color: modelData.accepted ? Color.accent : Qt.darker(root.contentForeground, 1.5); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
               }
               MouseArea {

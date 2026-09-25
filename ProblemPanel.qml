@@ -62,7 +62,11 @@ Column {
   // 视图切换：并排需要宽度，窄了就落到代码视图
   function selectTab(key) {
     var wanted = key
-    if (key === "split" && !canSplit) wanted = "submit"
+    if (key === "split" && !canSplit) {
+      // 不要静默忽略：明确告诉用户是宽度不够，并把他导向"看题面"
+      root.submitStatus = "面板太窄：把窗口拉宽即可使用「并排」（需要 880px 以上）"
+      wanted = "statement"
+    }
     root.tab = wanted
     if (wanted === "submit" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
   }
@@ -438,11 +442,14 @@ Column {
     width: parent.width
     spacing: Style.space(10)
     Rectangle {
-      width: Style.space(56)
+      // 「NOI/NOI+/CTSC」这种长名字要放得下，所以宽度跟着文字走
+      id: difficultyChip
+      width: Math.max(Style.space(48), difficultyLabel.implicitWidth + Style.space(12))
       height: Style.space(22)
       radius: Style.space(4)
       color: root.detail ? Model.difficultyColor(root.detail.difficulty) : "transparent"
       Text {
+        id: difficultyLabel
         anchors.centerIn: parent
         text: root.detail ? Model.difficultyName(root.detail.difficulty) : ""
         color: Color.background
@@ -451,7 +458,7 @@ Column {
       }
     }
     Text {
-      width: parent.width - Style.space(66)
+      width: parent.width - difficultyChip.width - Style.space(10)
       text: root.detail ? (root.detail.pid + "  " + root.detail.name) : root.pid
       wrapMode: Text.WordWrap
       color: root.foreground
@@ -515,7 +522,11 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       width: Math.max(Style.space(60), parent.width - Style.space(320))
       elide: Text.ElideRight
-      text: root.splitLayout ? "左题面 · 右代码 · 右下样例" : "Ctrl+Enter 提交 · Ctrl+R 跑样例 · Ctrl+/ 注释"
+      text: root.splitLayout
+        ? "左题面 · 右代码 · 右下样例"
+        : (root.canSplit
+            ? "Ctrl+Enter 提交 · Ctrl+R 跑样例 · Ctrl+/ 注释"
+            : "面板太窄：把窗口拉宽就能用「并排」（需要 880px 以上）")
       color: Qt.darker(root.foreground, 1.6)
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -540,6 +551,21 @@ Column {
       }
       Flickable {
         id: statementPaneFlick
+        // 和外层窗口一致的滚轮调优：Omarchy 的 touchpad scroll_factor 是 0.4，
+        // 不乘回来会比系统里其它地方明显更慢
+        property int wheelStep: 140
+        property real wheelPixelFactor: 3.2
+        WheelHandler {
+          acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+          onWheel: function(event) {
+            var step = event.pixelDelta.y !== 0
+              ? event.pixelDelta.y * statementPaneFlick.wheelPixelFactor
+              : event.angleDelta.y / 120 * Style.space(statementPaneFlick.wheelStep)
+            if (step === 0) return
+            var limit = Math.max(0, statementPaneFlick.contentHeight - statementPaneFlick.height)
+            statementPaneFlick.contentY = Math.max(0, Math.min(limit, statementPaneFlick.contentY - step))
+          }
+        }
         width: parent.width
         height: root.splitLayout ? (parent.height - Style.space(18)) : Math.min(Style.space(4000), statementView.implicitHeight + Style.space(6))
         clip: root.splitLayout
