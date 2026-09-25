@@ -97,6 +97,7 @@ Panel {
   property string pasteCaptchaCode: ""
   property bool pasteSaving: false
   property string pasteWriteStatus: ""
+  property bool pasteDeleteConfirm: false
   property bool tagTableLoading: false
   property string problemView: "list"
   property var problemList: []
@@ -693,17 +694,39 @@ Panel {
   function submitPasteWrite() {
     if (csrfToken === "") { root.pasteWriteStatus = "CSRF 令牌尚未准备好，请稍后再试"; return }
     if (root.pasteSaving) return
-    if (root.pasteDraftData === "" && root.pasteComposerMode === "create") { root.pasteWriteStatus = "内容不能为空"; return }
-    if (root.pasteCaptchaCode.trim() === "") { root.pasteWriteStatus = "请填写验证码（点图片可换一张）"; return }
-    var body = { data: root.pasteDraftData, public: root.pasteDraftPublic, captcha: root.pasteCaptchaCode.trim() }
-    if (root.pasteComposerMode === "edit") {
+    var editing = root.pasteComposerMode === "edit"
+    if (root.pasteDraftData === "" && !editing) { root.pasteWriteStatus = "内容不能为空"; return }
+    // 新建实测必须带验证码；编辑不强制（删除就完全不需要验证码），填了才发
+    if (!editing && root.pasteCaptchaCode.trim() === "") { root.pasteWriteStatus = "请填写验证码（点图片可换一张）"; return }
+    var body = { data: root.pasteDraftData, public: root.pasteDraftPublic }
+    if (root.pasteCaptchaCode.trim() !== "") body.captcha = root.pasteCaptchaCode.trim()
+    if (editing) {
       if (root.pasteDetailId === "") { root.pasteWriteStatus = "没有正在编辑的剪贴板"; return }
       body.id = root.pasteDetailId
     }
     root.pasteSaving = true
     root.pasteWriteStatus = root.pasteComposerMode === "edit" ? "正在保存…" : "正在创建…"
-    pasteWriteProc.target = root.pasteComposerMode === "edit" ? "paste/_edit" : "paste/_new"
+    pasteWriteProc.target = editing ? "paste/_edit" : "paste/_new"
+    pasteWriteProc.query = editing ? ("?id=" + encodeURIComponent(root.pasteDetailId)) : ""
+    pasteWriteProc.httpMethod = "POST"
     pasteWriteProc.payloadBase64 = Model.utf8Base64(JSON.stringify(body))
+    pasteWriteProc.running = true
+  }
+
+  // 删除：DELETE /paste/_edit?id=<id>（浏览器实测；不需要验证码）。破坏性操作，
+  // 界面上要点两次才不会误删。
+  function deletePaste(id) {
+    var wanted = String(id || "").trim()
+    if (wanted === "") return
+    if (csrfToken === "") { root.pasteWriteStatus = "CSRF 令牌尚未准备好，请稍后再试"; return }
+    if (root.pasteSaving) return
+    root.pasteDeleteConfirm = false
+    root.pasteSaving = true
+    root.pasteWriteStatus = "正在删除…"
+    pasteWriteProc.target = "paste/_edit"
+    pasteWriteProc.query = "?id=" + encodeURIComponent(wanted)
+    pasteWriteProc.httpMethod = "DELETE"
+    pasteWriteProc.payloadBase64 = ""
     pasteWriteProc.running = true
   }
 
@@ -1478,10 +1501,13 @@ Panel {
   Process {
     id: pasteWriteProc
     property string target: "paste/_new"
+    property string query: ""
+    property string httpMethod: "POST"
     property string payloadBase64: ""
     property string resultId: ""
     stdinEnabled: true
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4\"", "luogu-paste-write", uid, clientId, csrfToken, target]
+    // $4 = 路径，$5 = query（删除是 DELETE /paste/_edit?id=…），$6 = 方法
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -X $6 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4$5\"", "luogu-paste-write", uid, clientId, csrfToken, target, query, httpMethod]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""
@@ -1493,12 +1519,15 @@ Panel {
         var ok = Model.writeResponseSucceeded(parsed.body, parsed.code)
         var result = Model.parsePasteWrite(parsed.body)
         pasteWriteProc.resultId = result.id
-        if (ok && result.id !== "") {
-          root.pasteWriteStatus = root.pasteComposerMode === "edit"
-            ? "已保存"
-            : "已创建 /paste/" + result.id + "（链接已复制）"
-          if (root.pasteComposerMode === "create") root.copyToClipboard("https://www.luogu.com.cn/paste/" + result.id)
-          root.pasteComposerOpen = false
+        var deleting = pasteWriteProc.httpMethod === "DELETE"
+        if (ok && (result.id !== "" || deleting)) {
+          root.pasteWriteStatus = deleting
+            ? "已删除 /paste/" + result.id
+            : (root.pasteComposerMode === "edit"
+                ? "已保存"
+                : "已创建 /paste/" + result.id + "（链接已复制）")
+          if (!deleting && root.pasteComposerMode === "create") root.copyToClipboard("https://www.luogu.com.cn/paste/" + result.id)
+          if (!deleting) root.pasteComposerOpen = false
         } else {
           root.pasteWriteStatus = "失败：" + (result.message !== "" ? result.message : Model.writeFailureMessage(parsed.code, parsed.body))
           if (String(root.pasteWriteStatus).indexOf("验证码") >= 0) root.refreshPasteCaptcha()
@@ -1506,8 +1535,16 @@ Panel {
       }
     }
     onExited: function(exitCode) {
+      var wasDelete = pasteWriteProc.httpMethod === "DELETE"
       root.pasteSaving = false
+      pasteWriteProc.httpMethod = "POST"
+      pasteWriteProc.query = ""
       root.loadPastes(false)
+      if (wasDelete) {
+        root.closePasteDetail()
+        pasteWriteProc.resultId = ""
+        return
+      }
       if (pasteWriteProc.resultId !== "") {
         root.openPasteDetail(pasteWriteProc.resultId)
         pasteWriteProc.resultId = ""
@@ -4483,6 +4520,7 @@ Panel {
                     color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.06)
                     Image { anchors.fill: parent; anchors.margins: Style.space(3); fillMode: Image.PreserveAspectFit; source: root.pasteCaptchaImage; cache: false }
                     Text { anchors.centerIn: parent; visible: root.pasteCaptchaImage === ""; text: pasteCaptchaProc.running ? "读取中…" : "点此获取验证码"; color: Qt.darker(root.contentForeground, 1.5); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 2; visible: root.pasteComposerMode === "edit" && root.pasteCaptchaImage !== ""; text: "编辑可不填"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.refreshPasteCaptcha() }
                   }
                   TextField {
@@ -4605,6 +4643,38 @@ Panel {
                   color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
                   Text { anchors.centerIn: parent; text: "编辑"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
                   MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.startPasteEdit() }
+                }
+                Rectangle {
+                  readonly property bool canDelete: root.pasteDetail !== null && root.pasteDetail.canEdit
+                  width: root.pasteDeleteConfirm ? Style.space(112) : Style.space(64)
+                  height: Style.space(28)
+                  radius: Style.cornerRadius
+                  visible: canDelete
+                  color: root.pasteDeleteConfirm ? Color.urgent : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+                  Text {
+                    anchors.centerIn: parent
+                    text: root.pasteDeleteConfirm ? "确认删除？" : "删除"
+                    color: root.pasteDeleteConfirm ? Color.background : Qt.darker(root.contentForeground, 1.15)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      if (root.pasteDeleteConfirm) root.deletePaste(root.pasteDetailId)
+                      else root.pasteDeleteConfirm = true
+                    }
+                  }
+                }
+                Text {
+                  width: Math.max(Style.space(40), parent.width - Style.space(92) * 2 - Style.space(64) - Style.space(112) - Style.space(176) - Style.space(48))
+                  anchors.verticalCenter: parent.verticalCenter
+                  elide: Text.ElideRight
+                  text: root.pasteWriteStatus
+                  color: root.pasteWriteStatus.indexOf("失败") >= 0 ? Color.urgent : Qt.darker(root.contentForeground, 1.5)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
                 }
                 Rectangle {
                   width: Style.space(120); height: Style.space(28)

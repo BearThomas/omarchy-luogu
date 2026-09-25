@@ -554,7 +554,16 @@ discovery tool than guessing paths. Writing is then:
 |---|---|---|---|
 | 新建 | `POST /paste/_new` | `{data, public, captcha}` | returns `{id}`; **needs a captcha** |
 | 编辑 | `POST /paste/_edit` | `{id, data, public, captcha}` | returns `{id}` |
-| 删除 | `POST /paste/_batop?method=…` | `{ids: [...]}` | the `method` value is never validated before the captcha, so it cannot be discovered safely — **not implemented** rather than guessed |
+| 删除 | `DELETE /paste/_edit?id=<id>` | *(no body)* | needs **no captcha** (confirmed by a browser capture: 200 OK) |
+| ~~批量~~ | ~~`POST /paste/_batop?method=…`~~ | — | never needed: the real delete is the DELETE above |
+
+Two details the capture settled that no amount of probing could: **deletion is the
+`DELETE` verb on the *same* `_edit` path** with the id in the **query string**
+(`?id=`), and it is not captcha-guarded — so `_batop` (whose `method` value is only
+validated *after* the captcha) was a red herring. The id is accepted from the query
+for the edit too, so the page now sends it both ways. Editing is therefore the only
+captcha-optional write: creation demands one, editing sends one only if the user
+fills it in.
 
 The captcha here is the **new** system (`/lg4/captcha`, exception
 `CaptchaChallengeException`) and is *not* the one submissions use
