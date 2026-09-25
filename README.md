@@ -600,11 +600,19 @@ Verified by measurement rather than by eye: for an 8-line file both layers repor
 
 ### Scrolling, chips and paging
 
-- Every scrollable surface in the plugin uses the same wheel tuning
-  (`wheelStep` 140, `wheelPixelFactor` 3.2). Omarchy sets the touchpad
-  `scroll_factor` to 0.4, so a `Flickable` left on the default step scrolls much
-  more slowly than the rest of the system; the statement pane and the editor were
-  the two that had been left out.
+- Every scrollable surface routes the wheel through one helper
+  (`wheelStepFor` + `applyWheel`) with `wheelStep` 220 / `wheelPixelFactor` 5.0.
+  The numbers came from instrumenting the handler and reading 181 real events off
+  this machine's touchpad: each event carries **both** `pixelDelta ≈ 5–11` **and**
+  `angleDelta ≈ ±120`, and Qt's default scrolls a `Flickable` by the pixel delta —
+  i.e. 5–11 px per event, which is what made scrolling feel slow here (Omarchy's
+  touchpad `scroll_factor` is 0.4). Tuning by the `angleDelta / 120` branch, as this
+  code first did, changes nothing on a touchpad because that branch never runs.
+  Measure the events before changing the numbers: add a `console.log` inside
+  `wheelStepFor` and read the log.
+- The first-party panels in the same shell (clipboard, menu, bluetooth) carry **no**
+  wheel handling at all — they take Qt's default — so this plugin is the one that
+  has to compensate.
 - **Difficulty chips size themselves to their text**
   (`Math.max(minWidth, label.implicitWidth + padding)`). They used to be fixed
   (56 px in the problem header, 54 px in the 题库 list, 46 px in a contest's problem

@@ -82,6 +82,24 @@ Column {
   property string externalPath: ""
   property string nvimStatus: ""
   readonly property string runnerPath: String(Qt.resolvedUrl("run-samples.sh")).replace("file://", "")
+
+  // 统一的滚轮换算。**不要假设一个事件就是 120 单位**：Omarchy 的 Util.wheelSteps
+  // 注释提到某些鼠标/合成器组合远超 120；反过来实测触控板给的值可能很小，按
+  // /120 折算会几乎不动 —— 那正是"滚得慢"的来源。这里同时打印原始值以便按真机
+  // 数据调参（调试完删掉 console.log 即可）。
+  function wheelStepFor(event, pixelFactor, stepSize) {
+    var pixel = event.pixelDelta ? event.pixelDelta.y : 0
+    var angle = event.angleDelta ? event.angleDelta.y : 0
+    var step = pixel !== 0 ? pixel * pixelFactor : angle / 120 * Style.space(stepSize)
+    return step
+  }
+
+  function applyWheel(flick, step) {
+    if (!flick || step === 0) return
+    var limit = Math.max(0, flick.contentHeight - flick.height)
+    flick.contentY = Math.max(0, Math.min(limit, flick.contentY - step))
+  }
+
   property string captchaImage: ""
   property bool captchaReady: false
   property string captchaCode: ""
@@ -553,17 +571,14 @@ Column {
         id: statementPaneFlick
         // 和外层窗口一致的滚轮调优：Omarchy 的 touchpad scroll_factor 是 0.4，
         // 不乘回来会比系统里其它地方明显更慢
-        property int wheelStep: 140
-        property real wheelPixelFactor: 3.2
+        property int wheelStep: 220
+        property real wheelPixelFactor: 5.0
         WheelHandler {
           acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
           onWheel: function(event) {
-            var step = event.pixelDelta.y !== 0
-              ? event.pixelDelta.y * statementPaneFlick.wheelPixelFactor
-              : event.angleDelta.y / 120 * Style.space(statementPaneFlick.wheelStep)
-            if (step === 0) return
-            var limit = Math.max(0, statementPaneFlick.contentHeight - statementPaneFlick.height)
-            statementPaneFlick.contentY = Math.max(0, Math.min(limit, statementPaneFlick.contentY - step))
+            var step = wheelStepFor(event, statementPaneFlick.wheelPixelFactor, statementPaneFlick.wheelStep)
+            if (step !== 0) event.accepted = true
+            applyWheel(statementPaneFlick, step)
           }
         }
         width: parent.width

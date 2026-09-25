@@ -38,6 +38,24 @@ Item {
   readonly property real editorHeight: editor.contentHeight
   readonly property real highlightHeight: highlightLayer.contentHeight
 
+  // 统一的滚轮换算。**不要假设一个事件就是 120 单位**：Omarchy 的 Util.wheelSteps
+  // 注释提到某些鼠标/合成器组合远超 120；反过来实测触控板给的值可能很小，按
+  // /120 折算会几乎不动 —— 那正是"滚得慢"的来源。这里同时打印原始值以便按真机
+  // 数据调参（调试完删掉 console.log 即可）。
+  function wheelStepFor(event, pixelFactor, stepSize) {
+    var pixel = event.pixelDelta ? event.pixelDelta.y : 0
+    var angle = event.angleDelta ? event.angleDelta.y : 0
+    var step = pixel !== 0 ? pixel * pixelFactor : angle / 120 * Style.space(stepSize)
+    return step
+  }
+
+  function applyWheel(flick, step) {
+    if (!flick || step === 0) return
+    var limit = Math.max(0, flick.contentHeight - flick.height)
+    flick.contentY = Math.max(0, Math.min(limit, flick.contentY - step))
+  }
+
+
   property var completions: []
   property int completionIndex: 0
 
@@ -147,17 +165,14 @@ Item {
     Flickable {
       id: verticalFlick
       // 滚轮调优（同「洛谷中心」窗口）：默认步进在触控板上太慢
-      property int wheelStep: 140
-      property real wheelPixelFactor: 3.2
+      property int wheelStep: 220
+      property real wheelPixelFactor: 5.0
       WheelHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         onWheel: function(event) {
-          var step = event.pixelDelta.y !== 0
-            ? event.pixelDelta.y * verticalFlick.wheelPixelFactor
-            : event.angleDelta.y / 120 * Style.space(verticalFlick.wheelStep)
-          if (step === 0) return
-          var limit = Math.max(0, verticalFlick.contentHeight - verticalFlick.height)
-          verticalFlick.contentY = Math.max(0, Math.min(limit, verticalFlick.contentY - step))
+          var step = wheelStepFor(event, verticalFlick.wheelPixelFactor, verticalFlick.wheelStep)
+          if (step !== 0) event.accepted = true
+          applyWheel(verticalFlick, step)
         }
       }
       anchors.fill: parent
