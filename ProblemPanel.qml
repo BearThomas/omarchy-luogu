@@ -380,7 +380,9 @@ Column {
       waitForEnd: true
       onStreamFinished: {
         var message = String(text || "").trim()
-        if (message !== "") root.sampleStatus = "运行器出错：" + message.slice(0, 160)
+        // 只在没拿到有效结果时才报告：运行器正常结束也会往 stderr 写东西（例如
+        // 被信号杀掉的子进程会带出 shell 的作业通知），别让它盖掉真正的判定。
+        if (message !== "" && root.sampleRun === null) root.sampleStatus = "运行器出错：" + message.slice(0, 160)
       }
     }
     onExited: function(exitCode) { root.sampleRunning = false }
@@ -783,6 +785,7 @@ Column {
                   Text {
                     width: parent.width
                     text: "样例 " + modelData.index + "   " + modelData.status + "   " + modelData.timeMs + "ms"
+                    + (modelData.stdoutBytes > 65536 ? "   输出 " + (Math.round(modelData.stdoutBytes / 1048576 * 10) / 10) + " MB（已截断）" : "")
                     color: modelData.status === "AC" ? Color.accent : Color.urgent
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

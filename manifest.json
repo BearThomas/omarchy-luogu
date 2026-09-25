@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bearthomas.luogu",
   "name": "Luogu",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "author": "BearThomas",
   "license": "MIT",
   "description": "Native Omarchy bar widget for Luogu: account overview, contests, problem bank, 犇犇 feed, posts, private messages, cloud clipboard and an in-panel code editor with local sample testing.",

@@ -61,24 +61,40 @@ while [ "$index" -le "$sample_count" ]; do
   jq -r ".samples[$((index - 1))].output // \"\"" "$dir/payload.json" > "$dir/expected.txt"
 
   status="AC"
-  stdout=""
   stderr=""
   elapsed=0
+  out_bytes=0
+  out_file="$dir/run.out"
+  : > "$out_file"
   if [ "$compile_ok" = true ]; then
     timeout_s=$(( time_limit_ms / 1000 + 2 ))
+    # 程序的输出直接落文件，**绝不用 $(...) 捕获**：时限管不住输出量，一个疯狂
+    # 打印的程序能在几秒内吃掉大量内存（实测旧版跑 putchar 死循环：程序 3 秒被
+    # 杀，但之后还要在几百 MB 的捕获变量上做 normalize，整轮 12.9 秒）。
+    # ulimit -f 再给文件大小兜底：8192 × 512B = 4MB，超了程序会被 SIGXFSZ 杀掉。
     start_ns=$(date +%s%N)
-    stdout=$(timeout "${timeout_s}s" sh -c "$run_cmd" < "$dir/input.txt" 2> "$dir/run.err")
+    # 用一个真正 fork 出来的 sh 跑：程序被 SIGXFSZ/SIGFPE 等信号杀掉时，父 shell 会
+    # 额外打一行作业通知（"File size limit exceeded"），而 `( )` 对单条命令不一定
+    # 真 fork，所以通知会从脚本自己的 stderr 冒出去、盖掉插件的提示文案。
+    sh -c 'timeout "$1s" sh -c "ulimit -f 8192 2>/dev/null; exec $2" < "$3" > "$4" 2> "$5"' \
+      sh "$timeout_s" "$run_cmd" "$dir/input.txt" "$out_file" "$dir/run.err" 2> "$dir/run.err.shell"
     code=$?
     end_ns=$(date +%s%N)
     elapsed=$(( (end_ns - start_ns) / 1000000 ))
     stderr=$(head -c 1000 "$dir/run.err" 2>/dev/null)
+    out_bytes=$(wc -c < "$out_file" | tr -d ' ')
     if [ "$code" -eq 124 ]; then
       status="TLE"
+    elif [ "$code" -eq 153 ]; then
+      # 153 = 128 + SIGXFSZ：撞上了 ulimit -f
+      status="RE"
+      stderr="输出过大：超过 4MB 上限，已被终止"
     elif [ "$code" -ne 0 ]; then
       status="RE"
     else
-      got=$(printf '%s' "$stdout" | normalize)
-      want=$(cat "$dir/expected.txt" | normalize)
+      # 只把前 64KB 读进内存比较；样例输出本来就很小
+      got=$(head -c 65536 "$out_file" | normalize)
+      want=$(head -c 65536 "$dir/expected.txt" | normalize)
       [ "$got" = "$want" ] || status="WA"
     fi
   else
@@ -89,10 +105,11 @@ while [ "$index" -le "$sample_count" ]; do
     --argjson index "$index" \
     --arg status "$status" \
     --argjson timeMs "$elapsed" \
-    --arg stdout "$(stdout=$stdout; printf '%s' "$stdout" | head -c 4000)" \
+    --argjson stdoutBytes "$out_bytes" \
+    --arg stdout "$(head -c 4000 "$out_file" 2>/dev/null | tr -d '\000')" \
     --arg expected "$(head -c 4000 "$dir/expected.txt")" \
     --arg stderr "$(printf '%s' "$stderr" | head -c 1000)" \
-    '{index:$index, status:$status, timeMs:$timeMs, stdout:$stdout, expected:$expected, stderr:$stderr}' >> "$dir/results.jsonl"
+    '{index:$index, status:$status, timeMs:$timeMs, stdoutBytes:$stdoutBytes, stdout:$stdout, expected:$expected, stderr:$stderr}' >> "$dir/results.jsonl"
 
   index=$((index + 1))
 done

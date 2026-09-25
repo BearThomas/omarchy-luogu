@@ -666,7 +666,17 @@ highlighting:
 It compiles in a temp dir with `g++`/`gcc`/`javac`/`rustc`/`go`/`fpc`, interprets
 with `python3`/`node`, runs each sample under `timeout (limit + 2s)`, and compares
 with trailing whitespace and trailing blank lines normalised — the same way a
-judge does. Verdicts **AC / WA / CE / TLE / RE** with the diff and timing.
+judge does.
+
+**The tested program's output is never captured into a shell variable.** A time
+limit does not bound output, so a program that prints in a loop can exhaust memory
+long before it is killed — with `while (true) putchar('x')` the first version of
+this script peaked at **678 MB and took 12.9 s** for a 1-second limit. The output
+now goes straight to a file, the run happens under `ulimit -f 8192` (4 MB, so a
+runaway program is killed by `SIGXFSZ`), only a 64 KB prefix is read for the
+comparison, and the JSON reports `stdoutBytes` so an oversized run is visible
+instead of silent. Same program now: **3.7 MB peak, 2.1 s**, reported as
+`RE` with 「输出过大：超过 4MB 上限，已被终止」. Verdicts **AC / WA / CE / TLE / RE** with the diff and timing.
 Nothing is sent to Luogu and no submission record is created. (It does execute
 your code locally with your own privileges, exactly like an IDE would.)
 
