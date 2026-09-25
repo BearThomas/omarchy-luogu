@@ -453,6 +453,29 @@ Also supported on the problem page: the per-problem discussion list
 (`/discuss?forum=<pid>`, 30 per page) and a thread view with Markdown-rendered
 replies, paginated the same way as the 帖子 page.
 
+## 洛谷账号设置 (read-only)
+
+Three GET endpoints back the 设置 page in the sidebar:
+
+| section | endpoint | payload |
+|---|---|---|
+| 奖项认证 | `GET /user/setting/prize?_contentOnly=1` | `{hasRealName, prizeLevel:{oi:{level},xcpc:{level}}, prizes:[{prize:{year,contest,event,prize,score,rank,name,affiliation,type}, showLevel}]}` — `name`/`affiliation` are the **verified real name and school** |
+| 账号安全 | `GET /user/setting/security?_contentOnly=1` | `{email, phone, realName, totpSet, usernameUpdateTime, adminLogs}` — phone and realName come **masked** (`86134*****652`, `熊**`) |
+| 第三方绑定 | `GET /user/setting?_contentOnly=1` | `{qqGroupToken, vjudgeAccounts:[{username,oj}], openidAccounts:[{username,platform}]}` |
+
+`/user/setting/<name>` only answers for `prize` and `security`; `profile`, `info`,
+`account`, `bind`, `privacy`, `notification`, `email`, `phone`… all 404.
+
+**Editing is not implemented, and that is not an oversight.** The write endpoints
+are not discoverable from here: the settings *page* HTML answers a 302 loop back to
+itself for anything that is not a real browser (`ws-action: cc` from Luogu's CDN),
+so its front-end bundle — which would name the update routes — cannot be read, and
+plain guesses (`/api/user/update`, `/api/user/setting/update`, `/api/user/profile/
+update`, …) all 404 while a genuine write route is distinguishable by its
+`403 InvalidCaptchaException`/`400` answer. To add editing, capture the request in
+the browser's devtools (change a field, copy the URL, headers and body) and it can
+be wired up the same way as the submission flow.
+
 ## Discussion writes: captcha and boards
 
 Both discussion writes (`POST /api/discuss/post`, `POST /api/discuss/reply/:id`) are

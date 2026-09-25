@@ -68,6 +68,11 @@ Panel {
   property bool benbenEditorOpen: false
   property string chatDraft: ""
   property var tagTable: ({ byId: {}, groups: [] })
+  property var accountSecurity: null
+  property var accountPrizes: null
+  property var accountBindings: null
+  property bool accountLoading: false
+  property int accountPending: 0
   property bool tagTableLoading: false
   property string problemView: "list"
   property var problemList: []
@@ -546,9 +551,30 @@ Panel {
     loadPostPage(postReplyPage)
   }
 
+  // 洛谷账号设置（只读）：奖项认证 / 账号安全 / 第三方绑定。三个都是 GET，
+  // 「改」的接口探不到（设置页 HTML 对非浏览器客户端是 302 自我循环）。
+  function loadAccountSettings() {
+    if (uid === "" || clientId === "") return
+    accountPending = 3
+    accountLoading = true
+    var base = ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/$3?_contentOnly=1\"", "luogu-account", uid, clientId]
+    accountPrizeProc.command = base.concat(["user/setting/prize"])
+    accountPrizeProc.running = true
+    accountSecurityProc.command = base.concat(["user/setting/security"])
+    accountSecurityProc.running = true
+    accountBindingsProc.command = base.concat(["user/setting"])
+    accountBindingsProc.running = true
+  }
+
+  function accountDone() {
+    accountPending = Math.max(0, accountPending - 1)
+    if (accountPending === 0) accountLoading = false
+  }
+
   function openDetailPage(key) {
     detailPage = key
     if (key === "problems") { openProblemBank(); return }
+    if (key === "account") { loadAccountSettings(); return }
     if (key !== "chat") return
     if (chatSelectedUid === "" && chatSessions.length > 0) openChatWith(chatSessions[0].uid, chatSessions[0].name, chatSessions[0].color)
     else if (chatSelectedUid !== "") loadChatMessages()
@@ -1272,6 +1298,42 @@ Panel {
   // 评测轮询：status 0/1 是 Waiting/Judging，出结果就停。
 
 
+  Process {
+    id: accountPrizeProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.accountPrizes = Model.parsePrizeSettings(String(text || ""))
+        root.accountDone()
+      }
+    }
+    onExited: function(exitCode) { root.accountDone() }
+  }
+
+  Process {
+    id: accountSecurityProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.accountSecurity = Model.parseAccountSecurity(String(text || ""))
+        root.accountDone()
+      }
+    }
+    onExited: function(exitCode) { root.accountDone() }
+  }
+
+  Process {
+    id: accountBindingsProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.accountBindings = Model.parseAccountBindings(String(text || ""))
+        root.accountDone()
+      }
+    }
+    onExited: function(exitCode) { root.accountDone() }
+  }
+
   // One search box covers both cases: Luogu matches a numeric keyword against
   // the uid itself and anything else against the user name.
   Process {
@@ -1973,7 +2035,8 @@ Panel {
                 { key: "benben", label: "犇犇" },
                 { key: "posts", label: "帖子" },
                 { key: "chat", label: "私信" },
-                { key: "notice", label: "通知" }
+                { key: "notice", label: "通知" },
+                { key: "account", label: "设置" }
               ]
               delegate: Rectangle {
                 required property var modelData
@@ -4018,6 +4081,193 @@ Panel {
 
           }
         }
+
+          // ---------------- 洛谷账号设置（只读）----------------
+          // 奖项认证 / 账号安全 / 第三方绑定，三段都来自 /user/setting* 的 JSON。
+          // 「改」的接口在这台机器上探不到：设置页 HTML 对非浏览器客户端是 302
+          // 自我循环，读不到前端 JS，所以这里只展示，修改走「打开洛谷设置」。
+          Column {
+            visible: root.detailPage === "account"
+            width: parent.width
+            spacing: Style.space(12)
+
+            Row {
+              width: parent.width
+              Text { width: parent.width - Style.space(140); text: "洛谷设置"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.iconLarge; font.bold: true }
+              Rectangle {
+                width: Style.space(140)
+                height: Style.space(28)
+                color: "transparent"
+                Text { anchors.centerIn: parent; text: "打开洛谷设置"; color: Color.accent; font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally("https://www.luogu.com.cn/user/setting") }
+              }
+            }
+
+            Text {
+              visible: root.accountLoading
+              text: "正在读取账号设置…"
+              color: Qt.darker(root.contentForeground, 1.5)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            // ---- 个人信息 ----
+            Text { text: "个人信息"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.subtitle; font.bold: true }
+            Rectangle {
+              width: parent.width
+              height: infoBody.implicitHeight + Style.space(20)
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+              Column {
+                id: infoBody
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(4)
+                Text {
+                  width: parent.width
+                  text: (root.profile.name || "未登录") + "   UID " + root.profile.uid
+                    + (root.accountPrizes ? (root.accountPrizes.hasRealName ? "   已实名" : "   未实名") : "")
+                  color: Model.userColor({ color: root.profile.color }, root.contentForeground)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+                Text {
+                  width: parent.width
+                  text: (root.accountPrizes && root.accountPrizes.oiLevel > 0 ? "OI 认证等级 " + root.accountPrizes.oiLevel + " 级" : "")
+                    + (root.accountPrizes && root.accountPrizes.xcpcLevel > 0 ? "   XCPC " + root.accountPrizes.xcpcLevel + " 级" : "")
+                    + (root.profile.ccfLevel > 0 ? "   CCF " + root.profile.ccfLevel + " 级" : "")
+                  visible: text !== ""
+                  color: Qt.darker(root.contentForeground, 1.45)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  width: parent.width
+                  visible: root.profile.introduction !== "" || root.profile.slogan !== ""
+                  text: root.profile.introduction !== "" ? root.profile.introduction : root.profile.slogan
+                  wrapMode: Text.WordWrap
+                  color: Qt.darker(root.contentForeground, 1.4)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+
+            // ---- 奖项认证 ----
+            Text { text: "奖项认证"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.subtitle; font.bold: true }
+            Text {
+              width: parent.width
+              visible: root.accountPrizes !== null && (root.accountPrizes.realName !== "" || root.accountPrizes.affiliation !== "")
+              wrapMode: Text.WordWrap
+              text: root.accountPrizes
+                ? ("实名 " + (root.accountPrizes.realName !== "" ? root.accountPrizes.realName : "—")
+                   + (root.accountPrizes.affiliation !== "" ? "   " + root.accountPrizes.affiliation : ""))
+                : ""
+              color: Qt.darker(root.contentForeground, 1.45)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+            Repeater {
+              model: root.accountPrizes ? root.accountPrizes.prizes : []
+              delegate: Rectangle {
+                required property var modelData
+                width: parent.width
+                height: Style.space(38)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.055)
+                Row {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(10)
+                  spacing: Style.space(8)
+                  Text { width: Style.space(38); text: modelData.year > 0 ? String(modelData.year) : ""; color: Qt.darker(root.contentForeground, 1.5); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  Text { width: Style.space(80); elide: Text.ElideRight; text: modelData.contest + (modelData.event !== "" ? " " + modelData.event : ""); color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+                  Text { width: Style.space(80); text: modelData.prize; color: Model.userColor({ color: root.profile.color }, Color.accent); font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
+                  Text { width: Style.space(56); text: modelData.type; color: Qt.darker(root.contentForeground, 1.55); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                  Text {
+                    width: parent.width - Style.space(38) - Style.space(80) - Style.space(80) - Style.space(56) - Style.space(40)
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
+                    text: (modelData.score > 0 ? modelData.score + " 分" : "") + (modelData.rank > 0 ? "   #" + modelData.rank : "")
+                    color: Qt.darker(root.contentForeground, 1.45)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+            }
+            Text {
+              visible: root.accountPrizes !== null && root.accountPrizes.prizes.length === 0
+              text: "暂无已认证的奖项"
+              color: Qt.darker(root.contentForeground, 1.5)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            // ---- 账号安全 ----
+            Text { text: "账号安全"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.subtitle; font.bold: true }
+            Rectangle {
+              width: parent.width
+              visible: root.accountSecurity !== null
+              height: safeBody.implicitHeight + Style.space(20)
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+              Column {
+                id: safeBody
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(4)
+                Text { width: parent.width; text: root.accountSecurity ? ("邮箱 " + (root.accountSecurity.email !== "" ? root.accountSecurity.email : "未绑定")) : ""; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall }
+                Text { width: parent.width; text: root.accountSecurity ? ("手机 " + (root.accountSecurity.phone !== "" ? root.accountSecurity.phone : "未绑定") + "   实名 " + (root.accountSecurity.realName !== "" ? root.accountSecurity.realName : "未实名")) : ""; color: Qt.darker(root.contentForeground, 1.45); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                Text { width: parent.width; text: root.accountSecurity ? ("两步验证 " + (root.accountSecurity.totpSet ? "已开启" : "未开启")) : ""; color: Qt.darker(root.contentForeground, 1.45); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+              }
+            }
+
+            // ---- 第三方绑定 ----
+            Text { text: "第三方绑定"; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.subtitle; font.bold: true }
+            Repeater {
+              model: {
+                var out = []
+                var bindings = root.accountBindings
+                if (!bindings) return out
+                for (var i = 0; i < bindings.vjudge.length; i++) out.push({ label: "VJudge", value: bindings.vjudge[i].username + "（" + bindings.vjudge[i].oj + "）" })
+                for (var j = 0; j < bindings.openid.length; j++) out.push({ label: "OpenID", value: bindings.openid[j].username + "（平台 " + bindings.openid[j].platform + "）" })
+                return out
+              }
+              delegate: Rectangle {
+                required property var modelData
+                width: parent.width
+                height: Style.space(34)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.055)
+                Row {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(10)
+                  spacing: Style.space(10)
+                  Text { width: Style.space(70); text: modelData.label; color: root.contentForeground; font.family: root.contentFontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+                  Text { width: parent.width - Style.space(80); elide: Text.ElideRight; text: modelData.value; color: Qt.darker(root.contentForeground, 1.45); font.family: root.contentFontFamily; font.pixelSize: Style.font.caption }
+                }
+              }
+            }
+            Text {
+              visible: root.accountBindings !== null && root.accountBindings.vjudge.length === 0 && root.accountBindings.openid.length === 0
+              text: "暂无第三方绑定"
+              color: Qt.darker(root.contentForeground, 1.5)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+          }
+
       }
       }
     }

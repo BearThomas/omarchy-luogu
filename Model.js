@@ -1532,6 +1532,96 @@ function languageIdByName(name) {
   return 0
 }
 
+// --- 洛谷账号设置（只读）-------------------------------------------------------
+// 三个接口各返回一块：奖项认证 / 账号安全 / 第三方绑定。注意「改」的接口在这台
+// 机器上探不到（设置页 HTML 对非浏览器客户端是 302 自我循环，拿不到前端 JS），
+// 所以这里只做展示。
+
+// GET /user/setting/prize?_contentOnly=1
+function parsePrizeSettings(raw) {
+  var empty = { hasRealName: false, oiLevel: 0, xcpcLevel: 0, oiShow: false, xcpcShow: false, realName: "", affiliation: "", prizes: [] }
+  try {
+    var root = typeof raw === "string" ? JSON.parse(raw) : (raw || {})
+    var data = root.data || {}
+    var levels = data.prizeLevel || {}
+    var oi = levels.oi || {}
+    var xcpc = levels.xcpc || {}
+    var prizes = []
+    if (Array.isArray(data.prizes)) {
+      data.prizes.forEach(function(item) {
+        var prize = item.prize || item
+        prizes.push({
+          year: numberOr(prize.year, 0),
+          contest: textOr(prize.contest, ""),
+          event: textOr(prize.event, ""),
+          prize: textOr(prize.prize, ""),
+          score: numberOr(prize.score, 0),
+          rank: numberOr(prize.rank, 0),
+          name: textOr(prize.name, ""),
+          affiliation: textOr(prize.affiliation, ""),
+          type: textOr(prize.type, "")
+        })
+      })
+    }
+    var first = prizes.length > 0 ? prizes[0] : {}
+    return {
+      hasRealName: data.hasRealName === true,
+      oiLevel: numberOr(oi.level, 0),
+      xcpcLevel: numberOr(xcpc.level, 0),
+      oiShow: oi.show !== false,
+      xcpcShow: xcpc.show !== false,
+      realName: first.name || "",
+      affiliation: first.affiliation || "",
+      prizes: prizes
+    }
+  } catch (error) {
+    return empty
+  }
+}
+
+// GET /user/setting/security?_contentOnly=1 —— 手机/实名是打码后的字符串
+function parseAccountSecurity(raw) {
+  var empty = { email: "", phone: "", realName: "", totpSet: false, usernameUpdateTime: 0, adminLogCount: 0 }
+  try {
+    var root = typeof raw === "string" ? JSON.parse(raw) : (raw || {})
+    var data = root.data || {}
+    return {
+      email: textOr(data.email, ""),
+      phone: textOr(data.phone, ""),
+      realName: textOr(data.realName, ""),
+      totpSet: data.totpSet === true,
+      usernameUpdateTime: numberOr(data.usernameUpdateTime, 0),
+      adminLogCount: Array.isArray(data.adminLogs) ? data.adminLogs.length : 0
+    }
+  } catch (error) {
+    return empty
+  }
+}
+
+// GET /user/setting?_contentOnly=1 —— 第三方账号绑定
+function parseAccountBindings(raw) {
+  var empty = { vjudge: [], openid: [] }
+  try {
+    var root = typeof raw === "string" ? JSON.parse(raw) : (raw || {})
+    var data = root.data || {}
+    var vjudge = []
+    var openid = []
+    if (Array.isArray(data.vjudgeAccounts)) {
+      data.vjudgeAccounts.forEach(function(item) {
+        vjudge.push({ username: textOr(item.username, ""), oj: textOr(item.oj, "") })
+      })
+    }
+    if (Array.isArray(data.openidAccounts)) {
+      data.openidAccounts.forEach(function(item) {
+        openid.push({ username: textOr(item.username, ""), platform: numberOr(item.platform, 0) })
+      })
+    }
+    return { vjudge: vjudge, openid: openid }
+  } catch (error) {
+    return empty
+  }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     difficultyName: difficultyName,
@@ -1550,6 +1640,9 @@ if (typeof module !== "undefined") {
     parseArticle: parseArticle,
     utf8Base64: utf8Base64,
     latexToHtml: latexToHtml,
+    parsePrizeSettings: parsePrizeSettings,
+    parseAccountSecurity: parseAccountSecurity,
+    parseAccountBindings: parseAccountBindings,
     parseRecord: parseRecord,
     parseSubmitResult: parseSubmitResult,
     verdictColor: verdictColor,
