@@ -77,6 +77,12 @@ Column {
   // 需要一个能改输入的出口（同样只在本地编译运行，不联网、不产生提交记录）。
   property bool sampleCustom: false
   property string customInput: ""
+  // 本地草稿：由外层（洛谷中心/题目窗口）注入读写实现，组件只管"何时存/取"。
+  // 洛谷只会给"上次提交过的代码"，正在写还没交的那份关掉窗口就没了 —— 草稿补的
+  // 就是这个缺口，而且它比 lastCode 新，所以恢复时优先用它。
+  property var draftHost: null
+  property bool draftRestoring: false
+  property string draftNotice: ""
   // 高亮配色按主题明暗切换（VSCode 的暗/亮两套）
   readonly property bool isDarkTheme: {
     var background = Color.background
@@ -113,6 +119,17 @@ Column {
 
   signal requestTagTable()
 
+  // 编辑停下 1.2 秒就落盘：太勤会把磁盘写热，太懒又容易丢。关窗口另有一次 flush。
+  Timer {
+    id: draftSaveTimer
+    interval: 1200
+    onTriggered: root.saveDraftNow()
+  }
+
+  onCodeChanged: if (!root.draftRestoring && root.pid !== "" && root.draftHost) draftSaveTimer.restart()
+  onLanguageIdChanged: if (!root.draftRestoring && root.pid !== "" && root.draftHost) draftSaveTimer.restart()
+  Component.onDestruction: root.flushDraft()
+
   onPidChanged: if (root.pid !== "" && root.fetchDetail) root.load()
   onTabChanged: if (root.tab === "submit" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
   onPreloadedDetailChanged: root.adoptPreloaded()
@@ -145,9 +162,40 @@ Column {
       for (var i = 0; i < ids.length; i++) { if (ids[i] !== 5) { preferred = ids[i]; break } }
       if (preferred === 0 && ids.length > 0) preferred = ids[0]
     }
+    root.draftRestoring = true
     root.languageId = preferred
     root.code = parsed.lastCode
+    var local = root.localDraft()
+    var localCode = local ? String(local.code || "") : ""
+    if (localCode.trim() !== "" && localCode !== String(parsed.lastCode || "")) {
+      // 本地草稿优先：它记的是"还没交的进度"，比服务端的上次提交代码新
+      root.code = localCode
+      var savedLanguage = Number(local.lang)
+      if (ids.indexOf(savedLanguage) >= 0) root.languageId = savedLanguage
+      root.draftNotice = "已恢复本地草稿（保存于 " + Model.formatChatTime(local.at) + "）"
+    } else {
+      root.draftNotice = ""
+    }
+    root.draftRestoring = false
     if (root.tab === "submit" && root.captchaImage === "" && !captchaProc.running) root.loadCaptcha()
+  }
+
+  function localDraft() {
+    if (!root.draftHost || root.pid === "") return null
+    return root.draftHost.problemDraftFor(root.pid)
+  }
+
+  function saveDraftNow() {
+    if (!root.draftHost || root.pid === "") return
+    root.draftHost.storeProblemDraft(root.pid, root.code, root.languageId)
+    root.draftNotice = "草稿已自动保存 · " + Model.formatChatTime(Math.floor(Date.now() / 1000))
+  }
+
+  // 关窗口/销毁之前把待写的草稿立刻落盘（防抖计时器可能还没到点）
+  function flushDraft() {
+    if (!root.draftHost || root.pid === "") return
+    draftSaveTimer.stop()
+    root.saveDraftNow()
   }
 
   function load() {
@@ -756,6 +804,17 @@ Column {
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
             }
+          }
+
+          // 草稿状态（恢复提示 / 自动保存时间）
+          Text {
+            width: parent.width
+            visible: root.draftNotice !== ""
+            text: root.draftNotice
+            elide: Text.ElideRight
+            color: Qt.darker(root.foreground, 1.5)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
 
           // 自测输入：题目自带的样例是固定的，调边界、手算极端情况时经常需要自己

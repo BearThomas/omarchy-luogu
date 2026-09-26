@@ -29,6 +29,7 @@ The account overview (public profile data only — this account's):
 | 编辑器 | line numbers, syntax highlighting, auto-indent, bracket completion, `Ctrl+Enter` submit, `Ctrl+R` run samples, `Ctrl+/` comment; 「用 nvim」 hands the buffer to nvim and syncs saves back |
 | 评测样例 | compiles and runs your code against the problem's samples **locally** (AC/WA/CE/TLE/RE with timings and diffs) — no submission, no waiting |
 | 自测输入 | a paste-your-own-input box next to the samples: run the current code against data you type (edge cases, hand-computed extremes) and see stdout/stderr — same local pipeline, no submission |
+| 本地草稿 | whatever is in the editor is saved locally per problem (1.2 s after you stop typing, and again when the window closes), so closing the window no longer loses code you had not submitted yet; reopening the problem offers it back |
 | 犇犇 | the watching feed with names and colours, paging, and posting |
 | 帖子 | thread reading with in-panel Markdown rendering, replies, new posts |
 | 私信 | one conversation per user, user search by UID or name, infinite history |
@@ -91,6 +92,11 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
   would have taken unrelated files with it).
 - **It never writes your Omarchy configuration.** Settings are read from
   `shell.json`, never rewritten by the plugin.
+- **Local code drafts** live in `~/.local/state/omarchy/luogu-drafts.json`:
+  `{pid: {code, lang, at}}`, at most 40 problems (oldest dropped), written under
+  `umask 077` as `0600` through a temp file plus `mv`, so an interrupted write
+  cannot leave a half-written file. Clearing the editor removes that problem's
+  entry. Delete the file and the drafts are gone.
 - Writes go only where you ask: submitting code, posting, replying, sending a
   message, and creating/editing/deleting a paste — each behind its own button.
 - 「本地跑样例」 compiles and executes your code **on your machine** with your own
@@ -742,6 +748,30 @@ red when it crashes or times out). Internally it is the identical call as 跑样
 one sample, `output: ""` — so there is no second code path to go stale. Verified
 on the live window with a Python solution of A+B and input `3 4`: `compile ok`,
 `stdout "7"`, 37 ms.
+
+### 本地代码草稿 (drafts survive the window)
+
+Luogu's problem payload already carries `lastCode` / `lastLanguage` — the code you
+last *submitted* — and the editor pre-fills from it. What that cannot cover is the
+code you are still writing: closing the window used to drop it silently. The
+editor now also keeps a local draft per problem.
+
+- Precedence on opening a problem: **local draft → `lastCode` → template**, and
+  the language comes back with the draft when the problem accepts it. The panel
+  says which one it used (`已恢复本地草稿（保存于 17:11）`).
+- Written 1.2 s after you stop typing (`Timer` restarted by every change), plus a
+  `flushDraft()` when the window closes — the debounce alone would lose the last
+  keystrokes if you closed the window immediately.
+- `Component.onDestruction` flushes too, so the copy inside 洛谷中心's 题库 page
+  behaves the same as the standalone problem window.
+- Only the newest 40 problems are kept and an entry is dropped when you clear the
+  editor — an empty draft would otherwise "restore" a blank buffer over the code
+  Luogu knows you wrote.
+
+Verified on the live window: type → 90-byte `0600` file appears with the right
+`pid`/`lang`/`at`; close the window, open another problem, come back → the buffer
+is the draft, with 「已恢复本地草稿（保存于 17:11）」; clear the editor → the
+entry disappears from the file.
 
 ### nvim, for people who want the real thing
 

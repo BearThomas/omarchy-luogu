@@ -167,7 +167,10 @@ Panel {
   // Credentials used to be read only from open(), so right after a shell restart
   // the unread badge stayed empty and the 详细信息 window refused to open (it
   // needs profile.uid) until the popout had been opened once. Load them up front.
-  Component.onCompleted: loadCredentials()
+  Component.onCompleted: {
+    loadCredentials()
+    loadProblemDrafts()
+  }
 
   function open() {
     root.controller.show()
@@ -1971,6 +1974,86 @@ Panel {
     }
   }
 
+  // ---- 本地代码草稿 --------------------------------------------------------
+  // 洛谷只会给你"上次提交过的代码"，正在写、还没交的那份一关窗口就没了。草稿
+  // 存在本地一个文件里（{pid: {code, lang, at}}，0600，umask 077），写的时候
+  // 先落到同目录临时文件再 mv，避免中断留下半个文件。
+  property var problemDrafts: ({})
+  property bool problemDraftsReady: false
+  property string pendingDraftPayload: ""
+  readonly property int problemDraftLimit: 40
+  readonly property string draftFileName: "luogu-drafts.json"
+
+  function loadProblemDrafts() {
+    if (!draftsRead.running) draftsRead.running = true
+  }
+
+  function problemDraftFor(pid) {
+    var entry = problemDrafts[String(pid || "")]
+    return entry === undefined ? null : entry
+  }
+
+  function storeProblemDraft(pid, code, languageId) {
+    var key = String(pid || "")
+    if (key === "") return
+    var next = {}
+    for (var existing in problemDrafts) if (existing !== key) next[existing] = problemDrafts[existing]
+    // 清空代码 = 删掉这份草稿（否则"恢复"会把一片空白当成你的进度）
+    if (String(code || "").trim() !== "") {
+      next[key] = { code: code, lang: Number(languageId) || 0, at: Math.floor(Date.now() / 1000) }
+    }
+    var keys = Object.keys(next)
+    keys.sort(function(a, b) { return (Number(next[b].at) || 0) - (Number(next[a].at) || 0) })
+    var trimmed = {}
+    for (var i = 0; i < keys.length && i < problemDraftLimit; i++) trimmed[keys[i]] = next[keys[i]]
+    problemDrafts = trimmed
+    writeProblemDrafts()
+  }
+
+  function writeProblemDrafts() {
+    var payload = JSON.stringify(problemDrafts)
+    if (draftsWrite.running) { pendingDraftPayload = payload; return }
+    draftsWrite.payload = payload
+    draftsWrite.running = true
+  }
+
+  Process {
+    id: draftsRead
+    command: ["sh", "-c", "cat \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/luogu-drafts.json\" 2>/dev/null || true", "luogu-drafts-read"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var raw = String(text || "").trim()
+        var parsed = null
+        if (raw !== "") {
+          try { parsed = JSON.parse(raw) } catch (error) { parsed = null }
+        }
+        root.problemDrafts = (parsed && typeof parsed === "object") ? parsed : ({})
+        root.problemDraftsReady = true
+        if (parsed === null && raw !== "") root.statusText = "本地草稿文件无法解析，已按空处理"
+      }
+    }
+  }
+
+  Process {
+    id: draftsWrite
+    property string payload: ""
+    stdinEnabled: true
+    command: ["sh", "-c", "set -eu; umask 077; state_dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\"; mkdir -p \"$state_dir\"; target=\"$state_dir/luogu-drafts.json\"; IFS= read -r encoded; tmp=$(mktemp \"$state_dir/.luogu-drafts.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" \"$target\"", "luogu-drafts-write"]
+    onStarted: {
+      write(Model.utf8Base64(payload) + "\n")
+      payload = ""
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.statusText = "本地草稿保存失败"
+      if (root.pendingDraftPayload !== "") {
+        draftsWrite.payload = root.pendingDraftPayload
+        root.pendingDraftPayload = ""
+        draftsWrite.running = true
+      }
+    }
+  }
+
   Process {
     id: apiProc
     stdout: StdioCollector {
@@ -3648,6 +3731,7 @@ Panel {
               clientId: root.clientId
               csrfToken: root.csrfToken
               tagTable: root.tagTable
+              draftHost: root
               // 题面由本页自己取（下面的题解/讨论/发帖也要用它），组件只负责显示
               fetchDetail: false
               preloadedDetail: root.problemDetail
@@ -5137,7 +5221,11 @@ Panel {
       minimumSize: Qt.size(680, 520)
 
       onVisibleChanged: {
-        if (!visible) root.closeProblemWindow()
+        if (!visible) {
+          // 先把草稿落盘再销毁：防抖计时器可能还差几百毫秒
+          problemPanel.flushDraft()
+          root.closeProblemWindow()
+        }
       }
       Flickable {
         id: problemFlick
@@ -5196,6 +5284,7 @@ Panel {
             clientId: root.clientId
             csrfToken: root.csrfToken
             tagTable: root.tagTable
+            draftHost: root
             foreground: root.contentForeground
             accentColor: Color.accent
             fontFamily: root.contentFontFamily
