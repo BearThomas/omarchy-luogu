@@ -28,6 +28,7 @@ The account overview (public profile data only — this account's):
 | 交题 | language + O2 + captcha, then verdict polling with per-subtest results |
 | 编辑器 | line numbers, syntax highlighting, auto-indent, bracket completion, `Ctrl+Enter` submit, `Ctrl+R` run samples, `Ctrl+/` comment; 「用 nvim」 hands the buffer to nvim and syncs saves back |
 | 评测样例 | compiles and runs your code against the problem's samples **locally** (AC/WA/CE/TLE/RE with timings and diffs) — no submission, no waiting |
+| 自测输入 | a paste-your-own-input box next to the samples: run the current code against data you type (edge cases, hand-computed extremes) and see stdout/stderr — same local pipeline, no submission |
 | 犇犇 | the watching feed with names and colours, paging, and posting |
 | 帖子 | thread reading with in-panel Markdown rendering, replies, new posts |
 | 私信 | one conversation per user, user search by UID or name, infinite history |
@@ -35,6 +36,10 @@ The account overview (public profile data only — this account's):
 | 设置 | read your Luogu account settings (奖项认证 / 账号安全 / 第三方绑定) and edit 签名/简介/背景图 |
 
 ## Install
+
+Listed in the Omarchy plugin marketplace as
+[`bearthomas.luogu`](https://plugins.omarchy.org/plugin.html?id=bearthomas.luogu)
+(verified snapshot). The install command is the same either way:
 
 ```bash
 omarchy plugin add https://github.com/BearThomas/omarchy-luogu.git --enable
@@ -722,6 +727,21 @@ instead of silent. Same program now: **3.7 MB peak, 2.1 s**, reported as
 `RE` with 「输出过大：超过 4MB 上限，已被终止」. Verdicts **AC / WA / CE / TLE / RE** with the diff and timing.
 Nothing is sent to Luogu and no submission record is created. (It does execute
 your code locally with your own privileges, exactly like an IDE would.)
+
+### 自测输入 (paste your own input)
+
+The problem's samples are fixed, and the interesting cases are usually the ones
+nobody shipped a sample for — a boundary, a hand-computed extreme, four lines of
+random data. 「自测输入」 puts a paste box under the sample button: type or paste
+whatever you want on stdin, press 「用这组输入运行」, and the same local pipeline
+runs the current buffer against it.
+
+Because there is no expected output, no verdict is invented: the panel shows
+「自测完成　37ms」 and prints **程序输出** / stderr verbatim (a run is only tinted
+red when it crashes or times out). Internally it is the identical call as 跑样例 —
+one sample, `output: ""` — so there is no second code path to go stale. Verified
+on the live window with a Python solution of A+B and input `3 4`: `compile ok`,
+`stdout "7"`, 37 ms.
 
 ### nvim, for people who want the real thing
 

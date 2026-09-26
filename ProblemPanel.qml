@@ -73,6 +73,10 @@ Column {
   property var sampleRun: null
   property bool sampleRunning: false
   property string sampleStatus: ""
+  // 自测：自己粘一组输入跑一遍。题目自带的样例是死的，调边界/手算极端情况时
+  // 需要一个能改输入的出口（同样只在本地编译运行，不联网、不产生提交记录）。
+  property bool sampleCustom: false
+  property string customInput: ""
   // 高亮配色按主题明暗切换（VSCode 的暗/亮两套）
   readonly property bool isDarkTheme: {
     var background = Color.background
@@ -210,14 +214,28 @@ Column {
     if (root.code.trim() === "") { root.sampleStatus = "代码不能为空"; return }
     var samples = root.detail && Array.isArray(root.detail.samples) ? root.detail.samples : []
     if (samples.length === 0) { root.sampleStatus = "这道题没有样例数据"; return }
+    root.runLocal(samples.map(function(item) { return { input: item.input, output: item.output } }),
+      false, "正在编译并运行样例…")
+  }
+
+  // 自测：输入由用户给，没有期望输出，所以不判 AC/WA，只把程序输出原样显示。
+  function runCustomInput() {
+    if (root.sampleRunning) return
+    if (root.code.trim() === "") { root.sampleStatus = "代码不能为空"; return }
+    if (root.customInput.trim() === "") { root.sampleStatus = "先粘一组输入再运行"; return }
+    root.runLocal([{ input: root.customInput, output: "" }], true, "正在编译并运行自测…")
+  }
+
+  function runLocal(samples, custom, startedText) {
+    root.sampleCustom = custom
     root.sampleRunning = true
     root.sampleRun = null
-    root.sampleStatus = "正在编译并运行样例…"
+    root.sampleStatus = startedText
     runProc.payloadBase64 = Model.utf8Base64(JSON.stringify({
       language: Model.languageName(root.languageId),
       code: root.code,
       timeLimitMs: root.detail && root.detail.timeLimit > 0 ? root.detail.timeLimit : 1000,
-      samples: samples.map(function(item) { return { input: item.input, output: item.output } })
+      samples: samples
     }))
     runProc.running = true
   }
@@ -362,14 +380,21 @@ Column {
         try {
           root.sampleRun = JSON.parse(String(text || ""))
           var results = root.sampleRun.results || []
-          var passed = 0
-          var verdict = "全部通过"
-          for (var i = 0; i < results.length; i++) {
-            if (results[i].status === "AC") passed++
-            else verdict = "有未通过"
+          if (root.sampleRun.compile && root.sampleRun.compile.ok === false) {
+            root.sampleStatus = "编译失败"
+          } else if (root.sampleCustom) {
+            // 自测没有期望输出，判定无意义：只报告耗时，输出交给下面的面板
+            var first = results.length > 0 ? results[0] : null
+            root.sampleStatus = first ? ("自测完成　" + first.timeMs + "ms") : "自测没有结果"
+          } else {
+            var passed = 0
+            var verdict = "全部通过"
+            for (var i = 0; i < results.length; i++) {
+              if (results[i].status === "AC") passed++
+              else verdict = "有未通过"
+            }
+            root.sampleStatus = verdict + "（" + passed + " / " + results.length + "）"
           }
-          if (root.sampleRun.compile && root.sampleRun.compile.ok === false) verdict = "编译失败"
-          root.sampleStatus = verdict + "（" + passed + " / " + results.length + "）"
         } catch (error) {
           root.sampleRun = null
           root.sampleStatus = "运行器返回异常：" + String(error)
@@ -733,6 +758,70 @@ Column {
             }
           }
 
+          // 自测输入：题目自带的样例是固定的，调边界、手算极端情况时经常需要自己
+          // 造一组数据。这里只在本机编译运行（和「本地跑样例」同一条管线），没有
+          // 期望输出，所以不判 AC/WA，只把程序输出原样显示。
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              Text {
+                width: parent.width - Style.space(150)
+                anchors.verticalCenter: parent.verticalCenter
+                text: "自测输入（只在本地跑，不联网）"
+                elide: Text.ElideRight
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Rectangle {
+                readonly property bool ready: !root.sampleRunning && root.code.trim() !== "" && root.customInput.trim() !== ""
+                width: Style.space(142)
+                height: Style.space(30)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, ready ? 0.16 : 0.07)
+                Text {
+                  anchors.centerIn: parent
+                  text: (root.sampleRunning && root.sampleCustom) ? "运行中…" : "用这组输入运行"
+                  color: parent.ready ? root.foreground : Qt.darker(root.foreground, 1.45)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.runCustomInput() }
+              }
+            }
+
+            Rectangle {
+              width: parent.width
+              height: Style.space(66)
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+              border.width: 1
+              border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.11)
+
+              QQC.TextArea {
+                id: customInputArea
+                anchors.fill: parent
+                anchors.margins: Style.space(8)
+                padding: 0
+                background: Rectangle { color: "transparent" }
+                placeholderText: "把输入粘到这里，例如：\n3 4"
+                placeholderTextColor: Qt.darker(root.foreground, 1.7)
+                color: root.foreground
+                selectionColor: Color.accent
+                selectedTextColor: Color.background
+                font.family: "monospace"
+                font.pixelSize: Style.font.caption
+                wrapMode: TextEdit.WrapAnywhere
+                text: root.customInput
+                onTextChanged: root.customInput = text
+              }
+            }
+          }
+
           // 样例结果：本地跑出来的判定（不联网、不产生提交记录）
           Rectangle {
             visible: root.sampleStatus !== "" || root.sampleRun !== null
@@ -756,6 +845,13 @@ Column {
                   if (root.sampleRun === null) return root.foreground
                   if (root.sampleRun.compile && root.sampleRun.compile.ok === false) return Color.urgent
                   var results = root.sampleRun.results || []
+                  if (root.sampleCustom) {
+                    // 自测没有期望输出：只有崩掉或超时才值得标红，输出对不对由人判断
+                    for (var j = 0; j < results.length; j++) {
+                      if (results[j].status === "RE" || results[j].status === "TLE") return Color.urgent
+                    }
+                    return Color.accent
+                  }
                   for (var i = 0; i < results.length; i++) if (results[i].status !== "AC") return Color.urgent
                   return Color.accent
                 }
@@ -784,9 +880,14 @@ Column {
                   spacing: Style.space(4)
                   Text {
                     width: parent.width
-                    text: "样例 " + modelData.index + "   " + modelData.status + "   " + modelData.timeMs + "ms"
+                    text: (root.sampleCustom
+                      ? "自测"
+                      : "样例 " + modelData.index + "   " + modelData.status)
+                    + "   " + modelData.timeMs + "ms"
                     + (modelData.stdoutBytes > 65536 ? "   输出 " + (Math.round(modelData.stdoutBytes / 1048576 * 10) / 10) + " MB（已截断）" : "")
-                    color: modelData.status === "AC" ? Color.accent : Color.urgent
+                    color: (root.sampleCustom
+                      ? (modelData.status === "RE" || modelData.status === "TLE")
+                      : modelData.status !== "AC") ? Color.urgent : Color.accent
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true
@@ -794,7 +895,7 @@ Column {
                   Row {
                     width: parent.width
                     spacing: Style.space(8)
-                    visible: modelData.status === "WA"
+                    visible: modelData.status === "WA" && !root.sampleCustom
                     Column {
                       width: (parent.width - Style.space(8)) / 2
                       spacing: 2
@@ -808,9 +909,16 @@ Column {
                       Text { width: parent.width; text: modelData.stdout === "" ? "(空)" : modelData.stdout; wrapMode: Text.WrapAnywhere; maximumLineCount: 6; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
                     }
                   }
+                  Column {
+                    width: parent.width
+                    spacing: 2
+                    visible: root.sampleCustom
+                    Text { text: "程序输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    Text { width: parent.width; text: modelData.stdout === "" ? "(空)" : modelData.stdout; wrapMode: Text.WrapAnywhere; maximumLineCount: 16; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+                  }
                   Text {
                     width: parent.width
-                    visible: modelData.status === "RE" && modelData.stderr !== ""
+                    visible: modelData.stderr !== "" && (modelData.status === "RE" || root.sampleCustom)
                     text: modelData.stderr
                     wrapMode: Text.WrapAnywhere
                     maximumLineCount: 4
