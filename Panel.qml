@@ -2136,6 +2136,17 @@ Panel {
               MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openContestDetail(contestData.id) }
             }
           }
+
+          // 这一段本来就在这个「最近比赛」区块里，之前被误粘到了洛谷中心私信页的
+          // 末尾（在那边既没用又会把私信页撑高），现在放回它该在的地方。
+          Text {
+            visible: root.contests.length > 4
+            width: parent.width
+            text: "还有 " + (root.contests.length - 4) + " 场比赛，打开详细信息查看全部"
+            color: Color.accent
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
 
         Column {
@@ -2880,7 +2891,11 @@ Panel {
           // 高度必须显式给足：私信页是「应用式」布局（内部自己滚），如果只靠
           // 子项隐式高度，外层 Flickable 算出来的内容高度会比实际布局小，
           // 页面底部（含发送框）会被裁掉。
-          height: detailFlick.height
+          // 还要减掉自己的 y：detailColumn 顶部的操作状态文字（按下回车后立刻
+          // 变成"正在发送私信…"）在列里排在本页上方，一出现就把整页往下推
+          // （实测 +39px），发送框正好被推出可视区挡住。减去 y 之后两种状态
+          // 都留出同样的 20px 余量。
+          height: Math.max(Style.space(240), detailFlick.height - Math.max(0, y))
 
           Row {
             width: parent.width
@@ -3154,14 +3169,6 @@ Panel {
                 }
               }
             }
-          }
-          Text {
-            visible: root.contests.length > 4
-            width: parent.width
-            text: "还有 " + (root.contests.length - 4) + " 场比赛，打开详细信息查看全部"
-            color: Color.accent
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.caption
           }
         }
 

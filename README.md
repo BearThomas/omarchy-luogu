@@ -263,6 +263,41 @@ The widget stores the two login values in the desktop Secret Service through
    A `Loader` status probe is the fastest way to confirm it: log `status` in
    `onStatusChanged` (0 Null, 1 Ready, 2 Loading, 3 Error).
 
+13. **A Qt 6 positioner lays out only the *visible* children — which is exactly
+   what makes a shared status line dangerous.** (`visible: false` children are
+   skipped, so they cost nothing; an earlier version of this note claimed the
+   opposite.) `detailColumn` starts with the action-status label
+   (`"正在发送私信…"`, `"私信已发送"`, failures), and 私信 is the one page whose
+   height is tied to the viewport instead of to its content
+   (`height: detailFlick.height`, because it is an app-style page that scrolls
+   internally). While that label is hidden the page sits at `y = 0`; the moment it
+   appears the whole page is pushed down by the label plus the column spacing.
+   Pressing Enter in the send box does both things in one handler — it sets
+   `actionStatusText = "正在发送私信…"` *and* sends the message — so the page (and
+   with it the send box at its bottom) visibly sank and the box ended up under the
+   clip edge. Measured against the 692 px viewport:
+
+   | | `chatPage.y` | composer bottom | overflow |
+   |---|---|---|---|
+   | status hidden | 0 | 672 | −20 (fits) |
+   | status visible | 39 | 711 | **+19 (clipped)** |
+
+   The fix is to subtract the page's own `y`, since a positioner places a child
+   from the items *above* it and can therefore never feed back:
+
+   ```qml
+   height: Math.max(Style.space(240), detailFlick.height - Math.max(0, y))
+   ```
+
+   Both states now leave the same 20 px of slack (composer bottom 672 either way).
+   The other pages do not need this: their `contentHeight` is
+   `detailColumn.implicitHeight`, so they simply scroll.
+
+   While fixing this, a stray copy of the 最近比赛 footer
+   (`还有 N 场比赛，打开详细信息查看全部`) was found at the end of 私信 — it had
+   been pasted into the wrong page and was only inflating the chat page. It is back
+   in the 最近比赛 block it was written for.
+
 ### Contest problems open in their own window
 
 A problem reached from the 洛谷比赛 window used to be opened by driving the
