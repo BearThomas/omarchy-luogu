@@ -30,6 +30,7 @@ The account overview (public profile data only — this account's):
 | 评测样例 | compiles and runs your code against the problem's samples **locally** (AC/WA/CE/TLE/RE with timings and diffs) — no submission, no waiting |
 | 自测输入 | a paste-your-own-input box next to the samples: run the current code against data you type (edge cases, hand-computed extremes) and see stdout/stderr — same local pipeline, no submission |
 | 本地草稿 | whatever is in the editor is saved locally per problem (1.2 s after you stop typing, and again when the window closes), so closing the window no longer loses code you had not submitted yet; reopening the problem offers it back |
+| 对拍 | write a brute force and a Python data generator next to your solution, hit 开始对拍, and the three run against each other locally (up to 1000 rounds, 60 s cap); the first disagreement stops the loop and comes back with the input plus both outputs, so you can copy it straight into 自测输入 |
 | 犇犇 | the watching feed with names and colours, paging, and posting |
 | 帖子 | thread reading with in-panel Markdown rendering, replies, new posts |
 | 私信 | one conversation per user, user search by UID or name, infinite history |
@@ -93,10 +94,11 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
 - **It never writes your Omarchy configuration.** Settings are read from
   `shell.json`, never rewritten by the plugin.
 - **Local code drafts** live in `~/.local/state/omarchy/luogu-drafts.json`:
-  `{pid: {code, lang, at}}`, at most 40 problems (oldest dropped), written under
-  `umask 077` as `0600` through a temp file plus `mv`, so an interrupted write
-  cannot leave a half-written file. Clearing the editor removes that problem's
-  entry. Delete the file and the drafts are gone.
+  `{pid: {code, lang, at, brute?, generator?}}` (the 对拍 programs ride along),
+  at most 40 problems (oldest dropped), written under `umask 077` as `0600`
+  through a temp file plus `mv`, so an interrupted write cannot leave a
+  half-written file. Clearing the editor removes that problem's entry. Delete the
+  file and the drafts are gone.
 - Writes go only where you ask: submitting code, posting, replying, sending a
   message, and creating/editing/deleting a paste — each behind its own button.
 - 「本地跑样例」 compiles and executes your code **on your machine** with your own
@@ -772,6 +774,34 @@ Verified on the live window: type → 90-byte `0600` file appears with the right
 `pid`/`lang`/`at`; close the window, open another problem, come back → the buffer
 is the draft, with 「已恢复本地草稿（保存于 17:11）」; clear the editor → the
 entry disappears from the file.
+
+### 对拍 (stress testing, local)
+
+「我不知道它错在哪，但我知道暴力一定对」是这类题最常见的状态，所以对拍直接做进
+了面板：编辑器里的代码是**解法**，下面再写两份程序 —— **暴力**（正确但可以慢，
+和解题同一种语言）和**数据生成器**（固定 Python 3）。点「开始对拍」后循环：
+生成一组数据 → 两份程序各跑一遍 → 归一化后比对，第一处不一致就停下，并把
+**那组输入 + 两份输出**一起摊在面板上（可以直接复制到「自测输入」里手推）。
+
+结果分四种：`ok`（N 轮全部一致）、`mismatch`（附 input/solutionOut/bruteOut 和
+两边耗时）、`timeout`（跑满 60 秒）、`error`（生成器崩了、或某一份编译失败，
+编译失败会分开指出是哪一份）。解法在某组数据上 TLE/RE 也算 mismatch —— 那同样
+是"这组数据上你错了"。
+
+生成器固定 Python 3 是有意的：写随机数据比 C++ 顺手，而且少一次编译。循环里
+每份程序的时限仍是题目的时限 + 2 秒宽限，输出上限 4 MB（生成器写歪了不至于
+把面板卡死，60 秒总时长兜底）。
+
+### 两个脚本，一份实现
+
+`run-samples.sh`（题目样例）和 `run-stress.sh`（对拍）都 source `judge-lib.sh`,
+语言映射、编译、受限运行、输出归一化只有那一份 —— 这段代码里全是踩过的坑
+（输出不能进 shell 变量、`ulimit -f` 兜底、Java 的 Main 类名、`fpc -o` 的写法），
+复制第二份迟早两边跑偏。重构后重新验证过样例路径：AC / WA / CE / Python 自测
+都一致，`while (true) putchar('x')` 仍然是 4 MB 上限被杀（改动前 678 MB / 12.9 s，
+现在整条链路 0.5 s 内结束）；顺带补齐了撞上限的提示 —— 解释器（Python）不会死于
+`SIGXFSZ`，而是抛 `OSError`，现在两种语言都给同一句「输出过大：超过 4MB 上限，
+已被终止」。
 
 ### nvim, for people who want the real thing
 

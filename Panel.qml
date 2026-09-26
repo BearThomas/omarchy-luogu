@@ -1993,14 +1993,18 @@ Panel {
     return entry === undefined ? null : entry
   }
 
-  function storeProblemDraft(pid, code, languageId) {
+  function storeProblemDraft(pid, code, languageId, brute, generator) {
     var key = String(pid || "")
     if (key === "") return
     var next = {}
     for (var existing in problemDrafts) if (existing !== key) next[existing] = problemDrafts[existing]
     // 清空代码 = 删掉这份草稿（否则"恢复"会把一片空白当成你的进度）
     if (String(code || "").trim() !== "") {
-      next[key] = { code: code, lang: Number(languageId) || 0, at: Math.floor(Date.now() / 1000) }
+      var entry = { code: code, lang: Number(languageId) || 0, at: Math.floor(Date.now() / 1000) }
+      // 对拍的暴力/生成器跟解法一起存，下次开这题不用重写
+      if (String(brute || "").trim() !== "") entry.brute = brute
+      if (String(generator || "").trim() !== "") entry.generator = generator
+      next[key] = entry
     }
     var keys = Object.keys(next)
     keys.sort(function(a, b) { return (Number(next[b].at) || 0) - (Number(next[a].at) || 0) })

@@ -83,6 +83,16 @@ Column {
   property var draftHost: null
   property bool draftRestoring: false
   property string draftNotice: ""
+  // 对拍：解法就是编辑器里的代码，暴力用同一种语言，生成器固定 Python 3
+  // （写随机数据比 C++ 顺手，也少一次编译）。暴力/生成器跟着草稿一起存。
+  property bool stressOpen: false
+  property bool stressRunning: false
+  property var stressRun: null
+  property string stressStatus: ""
+  property string stressBrute: ""
+  property string stressGenerator: ""
+  property int stressRounds: 100
+  readonly property string stressRunnerPath: String(Qt.resolvedUrl("run-stress.sh")).replace("file://", "")
   // 高亮配色按主题明暗切换（VSCode 的暗/亮两套）
   readonly property bool isDarkTheme: {
     var background = Color.background
@@ -167,6 +177,11 @@ Column {
     root.code = parsed.lastCode
     var local = root.localDraft()
     var localCode = local ? String(local.code || "") : ""
+    if (local) {
+      // 对拍的暴力/生成器跟草稿一起存，这里一并恢复（没有就留空）
+      root.stressBrute = String(local.brute || "")
+      root.stressGenerator = String(local.generator || "")
+    }
     if (localCode.trim() !== "" && localCode !== String(parsed.lastCode || "")) {
       // 本地草稿优先：它记的是"还没交的进度"，比服务端的上次提交代码新
       root.code = localCode
@@ -187,7 +202,7 @@ Column {
 
   function saveDraftNow() {
     if (!root.draftHost || root.pid === "") return
-    root.draftHost.storeProblemDraft(root.pid, root.code, root.languageId)
+    root.draftHost.storeProblemDraft(root.pid, root.code, root.languageId, root.stressBrute, root.stressGenerator)
     root.draftNotice = "草稿已自动保存 · " + Model.formatChatTime(Math.floor(Date.now() / 1000))
   }
 
@@ -286,6 +301,28 @@ Column {
       samples: samples
     }))
     runProc.running = true
+  }
+
+  // 对拍：生成器造数据 → 解法 vs 暴力逐轮比对，第一处不一致就停下。
+  // 三份程序都在本地跑，不联网；生成器固定 Python 3。
+  function runStress() {
+    if (root.stressRunning) return
+    if (root.code.trim() === "") { root.stressOpen = true; root.stressStatus = "解法代码不能为空"; return }
+    if (root.stressBrute.trim() === "") { root.stressOpen = true; root.stressStatus = "先写一份暴力程序"; return }
+    if (root.stressGenerator.trim() === "") { root.stressOpen = true; root.stressStatus = "先写一个数据生成器（Python 3）"; return }
+    root.stressOpen = true
+    root.stressRunning = true
+    root.stressRun = null
+    root.stressStatus = "正在编译三份程序并开始对拍…"
+    stressProc.payloadBase64 = Model.utf8Base64(JSON.stringify({
+      language: Model.languageName(root.languageId),
+      solution: root.code,
+      brute: root.stressBrute,
+      generator: root.stressGenerator,
+      rounds: root.stressRounds,
+      timeLimitMs: root.detail && root.detail.timeLimit > 0 ? root.detail.timeLimit : 1000
+    }))
+    stressProc.running = true
   }
 
   function submit() {
@@ -459,6 +496,39 @@ Column {
       }
     }
     onExited: function(exitCode) { root.sampleRunning = false }
+  }
+
+  // 对拍运行器：一行 base64(JSON) 进 stdin，返回 JSON（成功 / 分歧 / 超时）
+  Process {
+    id: stressProc
+    property string payloadBase64: ""
+    stdinEnabled: true
+    command: ["sh", root.stressRunnerPath]
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var parsed = JSON.parse(String(text || ""))
+          root.stressRun = parsed
+          root.stressStatus = String(parsed.message || "")
+        } catch (error) {
+          root.stressRun = null
+          root.stressStatus = "对拍运行器返回异常：" + String(error)
+        }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = String(text || "").trim()
+        if (message !== "" && root.stressRun === null) root.stressStatus = "对拍运行器出错：" + message.slice(0, 160)
+      }
+    }
+    onExited: function(exitCode) { root.stressRunning = false }
   }
 
   Process {
@@ -993,6 +1063,196 @@ Column {
                     color: Color.urgent
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+            }
+          }
+
+          // 对拍：解法（编辑器里的代码）vs 暴力，用生成器造数据反复比对
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              Text {
+                width: Math.max(Style.space(120), parent.width - Style.space(348))
+                anchors.verticalCenter: parent.verticalCenter
+                text: "对拍（解法 vs 暴力，生成器用 Python 3）"
+                elide: Text.ElideRight
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              TextField {
+                width: Style.space(76)
+                horizontalAlignment: TextInput.AlignHCenter
+                text: String(root.stressRounds)
+                foreground: root.foreground
+                font.family: root.fontFamily
+                onEditingFinished: {
+                  var value = Math.floor(Number(text))
+                  if (!isFinite(value) || value < 1) value = 1
+                  if (value > 1000) value = 1000
+                  root.stressRounds = value
+                  text = String(value)
+                }
+              }
+              Rectangle {
+                width: Style.space(74)
+                height: Style.space(30)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
+                Text {
+                  anchors.centerIn: parent
+                  text: root.stressOpen ? "收起" : "展开"
+                  color: Qt.darker(root.foreground, 1.25)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.stressOpen = !root.stressOpen }
+              }
+              Rectangle {
+                readonly property bool ready: !root.stressRunning && root.code.trim() !== ""
+                width: Style.space(94)
+                height: Style.space(30)
+                radius: Style.cornerRadius
+                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, ready ? 0.16 : 0.07)
+                Text {
+                  anchors.centerIn: parent
+                  text: root.stressRunning ? "对拍中…" : "开始对拍"
+                  color: parent.ready ? root.foreground : Qt.darker(root.foreground, 1.45)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.runStress() }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.stressOpen
+
+              Text {
+                width: parent.width
+                text: "暴力程序（正确但可以慢，语言和上面一致）"
+                elide: Text.ElideRight
+                color: Qt.darker(root.foreground, 1.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              CodeEditor {
+                width: parent.width
+                height: Style.space(150)
+                text: root.stressBrute
+                language: Model.languageName(root.languageId)
+                foreground: root.foreground
+                accentColor: Color.accent
+                fontFamily: root.monoFamily
+                dark: root.isDarkTheme
+                onTextChanged: {
+                  root.stressBrute = text
+                  if (!root.draftRestoring) draftSaveTimer.restart()
+                }
+              }
+              Text {
+                width: parent.width
+                text: "数据生成器（Python 3：往 stdout 打一组输入）"
+                elide: Text.ElideRight
+                color: Qt.darker(root.foreground, 1.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              CodeEditor {
+                width: parent.width
+                height: Style.space(150)
+                text: root.stressGenerator
+                language: "Python 3"
+                foreground: root.foreground
+                accentColor: Color.accent
+                fontFamily: root.monoFamily
+                dark: root.isDarkTheme
+                onTextChanged: {
+                  root.stressGenerator = text
+                  if (!root.draftRestoring) draftSaveTimer.restart()
+                }
+              }
+            }
+
+            Rectangle {
+              visible: root.stressStatus !== "" || root.stressRun !== null
+              width: parent.width
+              height: stressBody.implicitHeight + Style.space(16)
+              radius: Style.cornerRadius
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
+
+              Column {
+                id: stressBody
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(6)
+
+                Text {
+                  width: parent.width
+                  text: root.stressStatus
+                  color: {
+                    if (root.stressRun === null) return root.foreground
+                    if (root.stressRun.status === "mismatch" || root.stressRun.status === "error") return Color.urgent
+                    return Color.accent
+                  }
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                Text {
+                  width: parent.width
+                  visible: root.stressRun !== null && root.stressRun.compile && root.stressRun.compile.message !== ""
+                  text: root.stressRun && root.stressRun.compile ? String(root.stressRun.compile.message) : ""
+                  wrapMode: Text.WrapAnywhere
+                  maximumLineCount: 10
+                  elide: Text.ElideRight
+                  color: Color.urgent
+                  font.family: "monospace"
+                  font.pixelSize: Style.font.caption
+                }
+
+                // 分歧现场：输入 + 两份输出，直接能复制去复现
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+                  visible: root.stressRun !== null && root.stressRun.mismatch !== null && root.stressRun.mismatch !== undefined
+                  Text { text: "输入"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                  Text {
+                    width: parent.width
+                    text: root.stressRun && root.stressRun.mismatch ? String(root.stressRun.mismatch.input) : ""
+                    wrapMode: Text.WrapAnywhere
+                    maximumLineCount: 10
+                    elide: Text.ElideRight
+                    color: root.foreground
+                    font.family: "monospace"
+                    font.pixelSize: Style.font.caption
+                  }
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(8)
+                    Column {
+                      width: (parent.width - Style.space(8)) / 2
+                      spacing: 2
+                      Text { text: "解法输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                      Text { width: parent.width; text: root.stressRun && root.stressRun.mismatch ? String(root.stressRun.mismatch.solutionOut) : ""; wrapMode: Text.WrapAnywhere; maximumLineCount: 12; elide: Text.ElideRight; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+                    }
+                    Column {
+                      width: (parent.width - Style.space(8)) / 2
+                      spacing: 2
+                      Text { text: "暴力输出"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                      Text { width: parent.width; text: root.stressRun && root.stressRun.mismatch ? String(root.stressRun.mismatch.bruteOut) : ""; wrapMode: Text.WrapAnywhere; maximumLineCount: 12; elide: Text.ElideRight; color: Color.accent; font.family: "monospace"; font.pixelSize: Style.font.caption }
+                    }
                   }
                 }
               }
