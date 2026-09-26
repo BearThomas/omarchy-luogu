@@ -74,8 +74,13 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
 ## Privacy and what it writes
 
 - **Credentials** live in `secret-tool` (or a `0600` file) and a small state file
-  at `~/.local/state/omarchy/luogu-session.json`. Nothing is sent anywhere except
-  `www.luogu.com.cn`.
+  at `~/.local/state/omarchy/luogu-session.json`, written under `umask 077` and
+  created `0600`. Nothing is sent anywhere except `www.luogu.com.cn`.
+- The **login cookie jar** lives in a private `0700` directory
+  (`$XDG_STATE_HOME/omarchy/luogu-login/`, file `0600`, removed after the login
+  attempt) rather than at a fixed path in `/tmp` — `/tmp` is world-readable and a
+  `curl -c` jar under a typical `022` umask is `0644`, i.e. readable by any other
+  local account while it holds session cookies.
 - **It never writes your Omarchy configuration.** Settings are read from
   `shell.json`, never rewritten by the plugin.
 - Writes go only where you ask: submitting code, posting, replying, sending a
