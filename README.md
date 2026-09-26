@@ -80,7 +80,10 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
   (`$XDG_STATE_HOME/omarchy/luogu-login/`, file `0600`, removed after the login
   attempt) rather than at a fixed path in `/tmp` — `/tmp` is world-readable and a
   `curl -c` jar under a typical `022` umask is `0644`, i.e. readable by any other
-  local account while it holds session cookies.
+  local account while it holds session cookies. Cleanup is confined to the files
+  the plugin created: the trap removes the jar itself and then `rmdir`s the
+  directory, which only ever succeeds while it is empty (an `rm -rf` on that path
+  would have taken unrelated files with it).
 - **It never writes your Omarchy configuration.** Settings are read from
   `shell.json`, never rewritten by the plugin.
 - Writes go only where you ask: submitting code, posting, replying, sending a
