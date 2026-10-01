@@ -262,12 +262,16 @@ Column {
   }
 
   // 写文件 → 等写完再启动终端（FileView 无法监听尚不存在的文件）
+  // 用外部 nvim 编辑：写临时文件 → 开终端跑 nvim → FileView 监听文件变化同步回来。
+  // 文件名由这里给（题目号 + 后缀），**目录由脚本决定**：必须是自己的私有目录
+  // （0700），不能是 /tmp 那种可预测路径 —— 别人可以先把目录和同名软链接摆好，
+  // 让我们"保存一次代码"变成覆盖桌面用户的任意文件（见 README 的 trap 14）。
   function openInNvim() {
     if (root.code.trim() === "") { root.nvimStatus = "代码不能为空"; return }
     root.nvimStatus = "正在写入临时文件…"
-    var path = "/tmp/luogu-edit/" + (root.pid === "" ? "scratch" : root.pid) + root.sourceExtension()
+    var name = (root.pid === "" ? "scratch" : root.pid) + root.sourceExtension()
     root.externalPath = ""
-    nvimWriteProc.payloadBase64 = Model.utf8Base64(JSON.stringify({ path: path, code: root.code }))
+    nvimWriteProc.payloadBase64 = Model.utf8Base64(JSON.stringify({ name: name, code: root.code }))
     nvimWriteProc.running = true
   }
 
@@ -406,7 +410,7 @@ Column {
     property string payloadBase64: ""
     property string targetPath: ""
     stdinEnabled: true
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; p=$(jq -r .path \"$f\"); mkdir -p \"$(dirname \"$p\")\"; jq -r .code \"$f\" > \"$p\"; printf '%s' \"$p\"", "luogu-nvim-write"]
+    command: ["sh", "-c", "set -eu; umask 077; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; name=$(jq -r .name \"$f\"); case \"$name\" in \"\"|*/*|*..*) printf '%s' '文件名不合法' >&2; exit 1 ;; esac; dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/luogu-edit\"; mkdir -p \"$dir\"; chmod 700 \"$dir\"; if [ -L \"$dir\" ] || [ ! -d \"$dir\" ] || [ \"$(stat -c %u \"$dir\")\" != \"$(id -u)\" ]; then printf '%s' '编辑目录不可信' >&2; exit 1; fi; p=\"$dir/$name\"; if [ -L \"$p\" ]; then rm -f \"$p\"; fi; if [ -e \"$p\" ] && [ ! -f \"$p\" ]; then printf '%s' '目标不是普通文件' >&2; exit 1; fi; jq -r .code \"$f\" > \"$p\"; printf '%s' \"$p\"", "luogu-nvim-write"]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""

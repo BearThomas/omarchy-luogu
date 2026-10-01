@@ -103,8 +103,9 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
   message, and creating/editing/deleting a paste — each behind its own button.
 - 「本地跑样例」 compiles and executes your code **on your machine** with your own
   privileges, exactly like an IDE. It is never uploaded.
-- 「用 nvim」 writes the buffer to `/tmp/luogu-edit/<pid>.<ext>` and opens nvim in a
-  terminal; that directory is yours to delete.
+- 「用 nvim」 writes the buffer to `~/.local/state/omarchy/luogu-edit/` (private
+  `0700` directory, file `0600`) and opens nvim in a terminal; that directory is
+  yours to delete. It is **not** under `/tmp` — see trap 14.
 
 ## Removal
 
@@ -313,6 +314,34 @@ The widget stores the two login values in the desktop Secret Service through
    (`还有 N 场比赛，打开详细信息查看全部`) was found at the end of 私信 — it had
    been pasted into the wrong page and was only inflating the chat page. It is back
    in the 最近比赛 block it was written for.
+
+14. **Never write a user-content file to a predictable path under `/tmp`.** 「用
+   nvim」 used to write `/tmp/luogu-edit/<pid>.<ext>`: predictable directory,
+   predictable file name, no check on either. Another local account can create that
+   directory and plant `P1001.cpp` as a **symlink** to a file owned by the desktop
+   user; the next 「用 nvim」 then opens with `O_TRUNC` through the link and silently
+   overwrites the target — a normal editor action turned into an arbitrary-file
+   clobber. Reproduced before fixing (decoy link → `IMPORTANT USER DATA` replaced by
+   the buffer contents):
+
+   ```bash
+   mkdir -p /tmp/luogu-edit; chmod 777 /tmp/luogu-edit
+   ln -sf ~/victim.txt /tmp/luogu-edit/P1001.cpp   # victim: any file of yours
+   # then: 「用 nvim」 → victim.txt is now the code from the editor
+   ```
+
+   The buffer now goes to `$XDG_STATE_HOME/omarchy/luogu-edit/`, which the plugin
+   creates `0700` under `umask 077` and refuses to use if it is a symlink, not a
+   directory, or not owned by the current user. The file name is validated
+   (no `/`, no `..`), a symlink at the destination is unlinked rather than followed,
+   a non-regular destination is refused, and the write itself stays in place
+   (truncate existing regular file) so the `FileView` watching it keeps working
+   across repeated 「用 nvim」. Verified after the fix: the planted symlink survives
+   untouched, the buffer lands in the private directory as `0600`, an external save
+   still syncs back (`已从 nvim 同步`), and a second write keeps the same inode.
+   The same audit covered every other write in the plugin: they are either `mktemp`
+   paths, or `0600` files written under `umask 077` inside the state directory
+   through a temp file plus `mv`.
 
 ### Contest problems open in their own window
 
