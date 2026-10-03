@@ -37,7 +37,7 @@ Panel {
     return base + "/omarchy"
   }
   readonly property string cookieJarPath: stateDir + "/luogu-cookies.txt"
-  readonly property string csrfFilePath: stateDir + "/luogu-csrf.txt"
+  readonly property string csrfConfigPath: stateDir + "/luogu-csrf.conf"
   property bool cookieJarRefreshPending: false
   property string pendingCookieJar: ""
   property string pendingCsrfToken: ""
@@ -384,7 +384,7 @@ Panel {
     if (benbenDraft.trim() === "") { statusText = "请输入犇犇内容"; return }
     if (csrfToken === "") { statusText = "CSRF 令牌尚未准备好，请稍后再试"; return }
     if (benbenProc.running) return
-    benbenProc.content = benbenDraft.trim()
+    benbenProc.payloadBase64 = Model.utf8Base64(benbenDraft.trim())
     benbenProc.succeeded = false
     benbenProc.errorMessage = ""
     actionStatusText = "正在发布犇犇…"
@@ -842,8 +842,7 @@ Panel {
     if (chatDraft.trim() === "") { statusText = "请输入私信内容"; return }
     if (csrfToken === "") { statusText = "CSRF 令牌尚未准备好，请稍后再试"; return }
     if (chatProc.running) return
-    chatProc.target = chatSelectedUid
-    chatProc.content = chatDraft.trim()
+    chatProc.payloadBase64 = Model.utf8Base64(JSON.stringify({ user: Number(chatSelectedUid), content: chatDraft.trim() }))
     chatProc.succeeded = false
     chatProc.errorMessage = ""
     actionStatusText = "正在发送私信…"
@@ -913,6 +912,10 @@ Panel {
     postProcWrite.forum = postForumDraft.trim() !== "" ? postForumDraft.trim() : "academics"
     postProcWrite.captcha = postCaptchaDraft.trim()
     postProcWrite.content = postContentDraft.trim()
+    postProcWrite.payloadBase64 = Model.utf8Base64(JSON.stringify({
+      captcha: postProcWrite.captcha, content: postProcWrite.content,
+      title: postProcWrite.title, forum: postProcWrite.forum
+    }))
     postProcWrite.succeeded = false
     postProcWrite.errorMessage = ""
     postProcWrite.problemContext = false
@@ -938,6 +941,10 @@ Panel {
     postProcWrite.forum = String(root.problemDetail.pid)
     postProcWrite.captcha = problemPostCaptchaDraft.trim()
     postProcWrite.content = problemPostContentDraft.trim()
+    postProcWrite.payloadBase64 = Model.utf8Base64(JSON.stringify({
+      captcha: postProcWrite.captcha, content: postProcWrite.content,
+      title: postProcWrite.title, forum: postProcWrite.forum
+    }))
     postProcWrite.succeeded = false
     postProcWrite.errorMessage = ""
     postProcWrite.problemContext = true
@@ -958,6 +965,9 @@ Panel {
     replyProc.postId = replyPostId.trim()
     replyProc.captcha = replyCaptcha.trim()
     replyProc.content = replyDraft.trim()
+    replyProc.payloadBase64 = Model.utf8Base64(JSON.stringify({
+      captcha: replyProc.captcha, content: replyProc.content
+    }))
     replyProc.succeeded = false
     replyProc.errorMessage = ""
     actionStatusText = "正在发表回复…"
@@ -1007,11 +1017,14 @@ Panel {
     cookieJarProc.running = true
   }
 
+  // 写成 curl 配置文件而不是裸令牌：命令只需 `-K <这个文件>`，令牌本身就不会
+  // 出现在 curl 的 argv 里（`-H "…$(cat file)"` 仍会把展开后的值放进 argv）。
   function syncCsrfFile() {
     var token = String(csrfToken || "")
     if (token === "") return
-    if (csrfFileProc.running) { pendingCsrfToken = token; return }
-    csrfFileProc.payload = token
+    var body = "header = \"X-CSRF-Token: " + token + "\"\n"
+    if (csrfFileProc.running) { pendingCsrfToken = body; return }
+    csrfFileProc.payload = body
     csrfFileProc.running = true
   }
 
@@ -1044,7 +1057,7 @@ Panel {
     id: csrfFileProc
     property string payload: ""
     stdinEnabled: true
-    command: ["sh", "-c", "set -eu; umask 077; dir=$(dirname \"$1\"); mkdir -p \"$dir\"; IFS= read -r encoded; tmp=$(mktemp \"$dir/.luogu-csrf.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" \"$1\"", "luogu-csrf-file", csrfFilePath]
+    command: ["sh", "-c", "set -eu; umask 077; dir=$(dirname \"$1\"); mkdir -p \"$dir\"; IFS= read -r encoded; tmp=$(mktemp \"$dir/.luogu-csrf.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" \"$1\"", "luogu-csrf-file", csrfConfigPath]
     onStarted: {
       write(Model.utf8Base64(payload) + "\n")
       payload = ""
@@ -1342,7 +1355,13 @@ Panel {
   Process {
     id: benbenProc
     property string content: ""
-    command: ["sh", "-c", "set -eu; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/x-www-form-urlencoded' -b \"$2\" --data-urlencode \"content=$4\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/feed/postBenben'", "luogu-benben", uid, cookieJarPath, csrfFilePath, content]
+    property string payloadBase64: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -K \"$3\" -H 'Content-Type: application/x-www-form-urlencoded' -b \"$2\" --data-urlencode \"content@$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/feed/postBenben'", "luogu-benben", uid, cookieJarPath, csrfConfigPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1375,7 +1394,13 @@ Panel {
     id: chatProc
     property string target: ""
     property string content: ""
-    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg user \"$4\" --arg content \"$5\" '{user:($user|tonumber),content:$content}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" -d \"$payload\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/chat/new'", "luogu-chat", uid, cookieJarPath, csrfFilePath, target, content]
+    property string payloadBase64: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -K \"$3\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/chat/new'", "luogu-chat", uid, cookieJarPath, csrfConfigPath]
     property bool succeeded: false
     property string errorMessage: ""
     stdout: StdioCollector {
@@ -1613,7 +1638,7 @@ Panel {
     property string resultId: ""
     stdinEnabled: true
     // $4 = 路径，$5 = query（删除是 DELETE /paste/_edit?id=…），$6 = 方法
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -X $6 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4$5\"", "luogu-paste-write", uid, cookieJarPath, csrfFilePath, target, query, httpMethod]
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -X $6 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -K \"$3\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4$5\"", "luogu-paste-write", uid, cookieJarPath, csrfConfigPath, target, query, httpMethod]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""
@@ -1696,7 +1721,7 @@ Panel {
     stdinEnabled: true
     property bool succeeded: false
     property string errorMessage: ""
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/user/setting' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/user/setting/userSpace'", "luogu-userspace", uid, cookieJarPath, csrfFilePath]
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/user/setting' -K \"$3\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/user/setting/userSpace'", "luogu-userspace", uid, cookieJarPath, csrfConfigPath]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""
@@ -1788,7 +1813,13 @@ Panel {
     property bool succeeded: false
     property string errorMessage: ""
     property bool problemContext: false
-    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg captcha \"$4\" --arg content \"$6\" --arg title \"$5\" --arg forum \"$7\" '{captcha:$captcha,content:$content,title:$title,forum:$forum}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" -d \"$payload\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/discuss/post'", "luogu-post", uid, cookieJarPath, csrfFilePath, captcha, title, content, forum]
+    property string payloadBase64: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -K \"$3\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/discuss/post'", "luogu-post", uid, cookieJarPath, csrfConfigPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1836,7 +1867,13 @@ Panel {
     property string content: ""
     property bool succeeded: false
     property string errorMessage: ""
-    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg captcha \"$4\" --arg content \"$5\" '{captcha:$captcha,content:$content}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" -d \"$payload\" -w '|%{http_code}' \"https://www.luogu.com.cn/api/discuss/reply/$6\"", "luogu-reply", uid, cookieJarPath, csrfFilePath, captcha, content, postId]
+    property string payloadBase64: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payloadBase64 + "\n")
+      payloadBase64 = ""
+    }
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -K \"$3\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/discuss/reply/$4'", "luogu-reply", uid, cookieJarPath, csrfConfigPath, postId]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1968,11 +2005,14 @@ Panel {
     property string password: ""
     property string captcha: ""
     stdinEnabled: true
-    command: ["sh", "-c", "set -eu; umask 077; username=''; password=''; captcha=''; IFS= read -r username; IFS= read -r password; IFS= read -r captcha; login_dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/luogu-login\"; jar=\"$login_dir/cookies.txt\"; headers=$(mktemp); body=$(mktemp); trap 'rm -f \"$headers\" \"$body\" \"$jar\"; rmdir \"$login_dir\" 2>/dev/null || true' EXIT; payload=$(jq -nc --arg username \"$username\" --arg password \"$password\" --arg captcha \"$captcha\" '{username:$username,password:$password,captcha:$captcha}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'Content-Type: application/json' -H \"X-CSRF-Token: $1\" -b \"$jar\" -c \"$jar\" -d \"$payload\" -D \"$headers\" 'https://www.luogu.com.cn/do-auth/password' -o \"$body\"; uid=$(sed -n 's/^set-cookie:.*_uid=\\([^;]*\\).*/\\1/ip' \"$headers\" | tail -1); client=$(sed -n 's/^set-cookie:.*__client_id=\\([^;]*\\).*/\\1/ip' \"$headers\" | tail -1); jq -nc --arg uid \"$uid\" --arg clientId \"$client\" --rawfile body \"$body\" '{uid:$uid,clientId:$clientId,body:$body}'", "login", loginCsrfToken]
+    command: ["sh", "-c", "set -eu; umask 077\nIFS= read -r username; IFS= read -r password; IFS= read -r captcha; IFS= read -r csrf\nlogin_dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/luogu-login\"; jar=\"$login_dir/cookies.txt\"\nheaders=$(mktemp); body=$(mktemp); secrets=$(mktemp); payload=$(mktemp); cfg=$(mktemp); result=$(mktemp)\ntrap 'rm -f \"$headers\" \"$body\" \"$secrets\" \"$payload\" \"$cfg\" \"$result\" \"$jar\"; rmdir \"$login_dir\" 2>/dev/null || true' EXIT\ncat >\"$secrets\" <<EOF\n$username\n$password\n$captcha\nEOF\njq -Rn '[inputs] | {username:.[0],password:.[1],captcha:.[2]}' <\"$secrets\" >\"$payload\"\ncat >\"$cfg\" <<EOF\nheader = \"X-CSRF-Token: $csrf\"\nEOF\ncurl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'Content-Type: application/json' -K \"$cfg\" -b \"$jar\" -c \"$jar\" --data-binary @\"$payload\" -D \"$headers\" 'https://www.luogu.com.cn/do-auth/password' -o \"$body\"\nuid=$(sed -n 's/^set-cookie:.*_uid=\\([^;]*\\).*/\\1/ip' \"$headers\" | tail -1)\nclient=$(sed -n 's/^set-cookie:.*__client_id=\\([^;]*\\).*/\\1/ip' \"$headers\" | tail -1)\ncat >\"$result\" <<EOF\n$uid\n$client\nEOF\njq -Rn --rawfile body \"$body\" '[inputs] | {uid:.[0], clientId:.[1], body:$body}' <\"$result\"\n", "login"]
     onStarted: {
+      // 四个值都走 stdin：任何子进程的 argv 里都不出现它们（jq 从文件读、curl 用
+      // --data-binary @file 与 -K 配置文件），见 README trap 15。
       write(username + "\n")
       write(password + "\n")
       write(captcha + "\n")
+      write(loginCsrfToken + "\n")
       password = ""
     }
     stdout: StdioCollector {
@@ -3819,7 +3859,7 @@ Panel {
               uid: root.uid
               clientId: root.clientId
               cookieJarPath: root.cookieJarPath
-              csrfFilePath: root.csrfFilePath
+              csrfConfigPath: root.csrfConfigPath
               csrfToken: root.csrfToken
               tagTable: root.tagTable
               draftHost: root
@@ -5374,7 +5414,7 @@ Panel {
             uid: root.uid
             clientId: root.clientId
             cookieJarPath: root.cookieJarPath
-            csrfFilePath: root.csrfFilePath
+            csrfConfigPath: root.csrfConfigPath
             csrfToken: root.csrfToken
             tagTable: root.tagTable
             draftHost: root

@@ -83,12 +83,15 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
 - **Credentials** live in `secret-tool` (or a `0600` file) and a small state file
   at `~/.local/state/omarchy/luogu-session.json`, written under `umask 077` and
   created `0600`. Nothing is sent anywhere except `www.luogu.com.cn`.
-- **Requests never carry the session secret as a command-line argument.** The
-  commands receive *paths* to two derived `0600` files — `luogu-cookies.txt` (a
-  Netscape jar with `_uid` / `__client_id`, read by curl with `-b`) and
-  `luogu-csrf.txt` (the scraped `X-CSRF-Token`, read with `$(cat …)`). Process
-  arguments are world-readable on Linux (`/proc/<pid>/cmdline`), so a secret in
-  `argv` is a secret for every local account; see trap 15.
+- **Requests never carry a secret, or the user's own text, as a command-line
+  argument.** Commands receive *paths* to derived `0600` files — `luogu-cookies.txt`
+  (a Netscape jar with `_uid` / `__client_id`, read by curl with `-b`) and
+  `luogu-csrf.conf` (a curl config holding `header = "X-CSRF-Token: …"`, read with
+  `-K`) — and the request body travels on **stdin** into a private temp file that
+  curl reads with `--data-binary @…` (or `--data-urlencode name@…`). Process
+  arguments are world-readable on Linux (`/proc/<pid>/cmdline`), so a secret — or a
+  half-written private message — in `argv` is readable by every local account; see
+  trap 15.
 - The **login cookie jar** lives in a private `0700` directory
   (`$XDG_STATE_HOME/omarchy/luogu-login/`, file `0600`, removed after the login
   attempt) rather than at a fixed path in `/tmp` — `/tmp` is world-readable and a
@@ -362,22 +365,39 @@ The widget stores the two login values in the desktop Secret Service through
    [new] curl -sS -b /home/<user>/.local/state/omarchy/luogu-cookies.txt https://…
    ```
 
-   Every request now receives **paths to private files** and nothing else secret:
-   the cookie jar (written `0600` under `umask 077` via temp file plus `mv`, in
-   Netscape format so curl reads it with `-b`) and the CSRF token file. `_uid` is
-   still passed as an argument, because it is public — it is in every profile URL
-   and shown in the plugin's own UI. The login POST is the one remaining caller
-   that carries a CSRF token in `argv`; that token belongs to the pre-login session
-   (the password itself already travels through stdin).
+   Every request receives **paths to private files** and nothing else secret: the
+   cookie jar (written `0600` under `umask 077` via temp file plus `mv`, in Netscape
+   format so curl reads it with `-b`), the CSRF config (`-K`), and — for the write
+   commands — a body file (`--data-binary @…`), so message and paste text never
+   reach `argv` either. `_uid` is still an argument because it is public: it is in
+   every profile URL and the plugin's own UI shows it.
 
-   Verified with a live scan: while the panel fired a burst of requests, 2182
-   samples of every `/proc/*/cmdline` on the machine found **zero** occurrences of
-   the client id. Reads were then re-checked against the real session (tags,
-   problem list/detail, solutions, account settings, paste list, chat, forums, the
-   CSRF scrape) and a write path was exercised side-effect-free — `paste/_new` with
-   a bogus captcha comes back `CaptchaChallengeException` (i.e. cookie *and* CSRF
-   were accepted and nothing was created), and `POST /user/setting/userSpace` with
-   an empty body (a documented no-op) returns `{"id":1611655}|200`.
+   The password login followed the same path: it already read username/password/
+   captcha from stdin, but then handed the password to `jq --arg` and the resulting
+   JSON to `curl -d`, putting both in `argv`. It now writes them to a private file
+   through a shell heredoc, builds the body with `jq` reading from that file
+   (`jq -Rn '[inputs] | …'`), and lets curl read the result with
+   `--data-binary @<file>`; the pre-login CSRF token goes into a `-K` config, and
+   the returned `clientId` is read back with `--rawfile` instead of `--arg`.
+
+   Verified twice. First with a stub `curl` that records its own `argv`: all six
+   write commands ran with marker values for the session secret, the CSRF token and
+   the body, and **no marker appeared in any argument** — the arguments were only
+   paths (`-K …`, `-b …`, `--data-binary @…`) plus public parameters; the config
+   and body files did contain them. Then a live scan: while the panel fired a burst
+   of requests, 2182 samples of every `/proc/*/cmdline` found **zero** occurrences
+   of the client id. Reads were re-checked against the real session (tags, problem
+   list/detail, solutions, account settings, paste list, chat, forums, the CSRF
+   scrape) and the write paths were exercised: `POST /api/discuss/post` with a bogus
+   captcha returns `InvalidCaptchaException`, `paste/_new` returns
+   `CaptchaChallengeException` (both mean cookie, CSRF and body were accepted and
+   nothing was created), and `POST /user/setting/userSpace` with an empty body (a
+   documented no-op) returns `{"id":1611655}|200`.
+
+   One caveat learned here: a **problem submission** is *not* safe to use as a
+   "bogus captcha" probe — `POST /fe/api/problem/submit` accepted a wrong captcha
+   and returned `{"rid":300726441}`, i.e. it really submitted. Never use the submit
+   path for transport tests.
 
 ### Contest problems open in their own window
 
