@@ -374,7 +374,26 @@ The widget stores the two login values in the desktop Secret Service through
 
    The password login followed the same path: it already read username/password/
    captcha from stdin, but then handed the password to `jq --arg` and the resulting
-   JSON to `curl -d`, putting both in `argv`. It now writes them to a private file
+   JSON to `curl -d`, putting both in `argv`.
+
+   The same sweep then covered everything else that had been handed to a child as a
+   *value* rather than a path:
+
+   | what used to be in `argv` | now |
+   |---|---|
+   | the private-message list and the notification list (`jq --argjson chat`
+     / `--argjson notice`) — message contents included | written to temp files, read
+     with `--slurpfile` |
+   | the contest list's per-contest `joined` flag (`--argjson joined`,
+     `--argjson details`) | `--slurpfile joined` / `--slurpfile details` |
+   | the login form's CSRF token and captcha image (`--arg csrf`, `--arg image`) | `--rawfile` from temp files |
+   | every captcha image (`--arg data`, four call sites) | `--rawfile data` |
+
+   What remains as an argument is only public data: `_uid`, contest/thread/page
+   numbers, tag slugs, a boolean that a contest board is postable, and the like —
+   `grep -o 'jq[^|]*' Panel.qml` gives the complete list, and every value in it is
+   either a file path or public.
+ It now writes them to a private file
    through a shell heredoc, builds the body with `jq` reading from that file
    (`jq -Rn '[inputs] | …'`), and lets curl read the result with
    `--data-binary @<file>`; the pre-login CSRF token goes into a `-K` config, and

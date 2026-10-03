@@ -243,7 +243,7 @@ Column {
     root.captchaCode = ""
     // Referer 要和提交时一致（都是题目页）：验证码是按会话 + 来源页绑定的，
     // 用首页去取、用题目页去交，容易被判「验证码错误」。
-    captchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/problem/$3\" -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-pwindow-captcha", uid, root.cookieJarPath, pid]
+    captchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); tf=$(mktemp); df=$(mktemp); trap 'rm -f \"$out\" \"$tf\" \"$df\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/problem/$3\" -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); cat >\"$tf\" <<EOF\n$type\nEOF\ncat >\"$df\" <<EOF\n$data\nEOF\njq -nc --rawfile type \"$tf\" --rawfile data \"$df\" '{mime:($type|sub(\"\\n$\";\"\")),data:($data|sub(\"\\n$\";\"\"))}'", "luogu-pwindow-captcha", uid, root.cookieJarPath, pid]
     captchaProc.running = true
   }
 

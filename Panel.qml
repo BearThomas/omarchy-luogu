@@ -701,7 +701,7 @@ Panel {
     root.pasteCaptchaReady = false
     root.pasteCaptchaImage = ""
     root.pasteCaptchaCode = ""
-    pasteCaptchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/\" -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-paste-captcha", uid, cookieJarPath]
+    pasteCaptchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); tf=$(mktemp); df=$(mktemp); trap 'rm -f \"$out\" \"$tf\" \"$df\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/\" -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); cat >\"$tf\" <<EOF\n$type\nEOF\ncat >\"$df\" <<EOF\n$data\nEOF\njq -nc --rawfile type \"$tf\" --rawfile data \"$df\" '{mime:($type|sub(\"\\n$\";\"\")),data:($data|sub(\"\\n$\";\"\"))}'", "luogu-paste-captcha", uid, cookieJarPath]
     pasteCaptchaProc.running = true
   }
 
@@ -1109,14 +1109,14 @@ Panel {
     apiProc.running = true
     contestProc.command = [
       "sh", "-c",
-      "set -u; jar=\"$2\"; page=\"$3\"; now=$(date +%s); list=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$jar\" \"https://www.luogu.com.cn/contest/list?_contentOnly=1&page=$page\") || exit 1; details='[]'; for id in $(printf '%s' \"$list\" | jq -r --argjson now \"$now\" '[.data.contests.result[] | select(.endTime > $now)][0:8][].id'); do joined=$(curl -fsS --max-time 10 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$jar\" \"https://www.luogu.com.cn/contest/$id?_contentOnly=1\" | jq -c '.data.joined // null' 2>/dev/null || printf 'null'); details=$(printf '%s' \"$details\" | jq -c --arg id \"$id\" --argjson joined \"$joined\" '. + [{id: ($id | tonumber), joined: $joined}]' 2>/dev/null || printf '%s' \"$details\"); done; printf '%s' \"$list\" | jq -c --argjson details \"$details\" --argjson page \"$page\" '{count: .data.contests.count, perPage: .data.contests.perPage, page: $page, contests: (reduce $details[] as $detail ((.data.contests.result | map(. + {joined: null})); map(if .id == $detail.id then . + {joined: $detail.joined} else . end)))}'",
+      "set -u; umask 077; jf=$(mktemp); df=$(mktemp); trap 'rm -f \"$jf\" \"$df\"' EXIT; jar=\"$2\"; page=\"$3\"; now=$(date +%s); list=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$jar\" \"https://www.luogu.com.cn/contest/list?_contentOnly=1&page=$page\") || exit 1; details='[]'; for id in $(printf '%s' \"$list\" | jq -r --argjson now \"$now\" '[.data.contests.result[] | select(.endTime > $now)][0:8][].id'); do joined=$(curl -fsS --max-time 10 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$jar\" \"https://www.luogu.com.cn/contest/$id?_contentOnly=1\" | jq -c '.data.joined // null' 2>/dev/null || printf 'null'); printf '%s' \"$joined\" > \"$jf\"\ndetails=$(printf '%s' \"$details\" | jq -c --arg id \"$id\" --slurpfile joined \"$jf\" '. + [{id: ($id | tonumber), joined: $joined[0]}]' 2>/dev/null || printf '%s' \"$details\")\ndone\nprintf '%s' \"$details\" > \"$df\"\nprintf '%s' \"$list\" | jq -c --slurpfile details \"$df\" --argjson page \"$page\" '{count: .data.contests.count, perPage: .data.contests.perPage, page: $page, contests: (reduce $details[0][] as $detail ((.data.contests.result | map(. + {joined: null})); map(if .id == $detail.id then . + {joined: $detail.joined} else . end)))}'",
       "luogu-contests", uid, cookieJarPath, String(contestPage)
     ]
     contestProc.running = true
     activityLoading = true
     activityProc.command = [
       "sh", "-c",
-      "jar=\"$2\"; headers=\"-A vscode-luogu@4.17.1 -H X-Requested-With:XMLHttpRequest -H Referer:https://www.luogu.com.cn/ -H x-lentille-request:content-only -b $jar\"; notice=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/user/notification?_contentOnly=1&page=1' 2>/dev/null || printf '{}'); chat=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/chat?_contentOnly=1' 2>/dev/null || printf '{}'); jq -nc --argjson notice \"$notice\" --argjson chat \"$chat\" '{notice:$notice,chat:$chat}'",
+      "jar=\"$2\"; headers=\"-A vscode-luogu@4.17.1 -H X-Requested-With:XMLHttpRequest -H Referer:https://www.luogu.com.cn/ -H x-lentille-request:content-only -b $jar\"; notice=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/user/notification?_contentOnly=1&page=1' 2>/dev/null || printf '{}'); chat=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/chat?_contentOnly=1' 2>/dev/null || printf '{}'); nf=$(mktemp); cf=$(mktemp); trap 'rm -f \"$nf\" \"$cf\"' EXIT\ncat >\"$nf\" <<EOF\n$notice\nEOF\ncat >\"$cf\" <<EOF\n$chat\nEOF\njq -nc --slurpfile notice \"$nf\" --slurpfile chat \"$cf\" '{notice:$notice[0],chat:$chat[0]}'",
       "luogu-activity", uid, cookieJarPath
     ]
     activityProc.running = true
@@ -1909,7 +1909,7 @@ Panel {
     // 登录用的 cookie jar 放在**私有目录**里（0700）而不是 /tmp 的固定路径：
     // /tmp 是全局可读的，common umask 下 jar 会是 0644 —— 同机其他账号能读到里面
     // 的会话 cookie。这里 umask 077 + 显式 chmod 700，登录结束后由下一个命令删掉。
-    command: ["sh", "-c", "set -eu; umask 077; login_dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/luogu-login\"; mkdir -p \"$login_dir\"; chmod 700 \"$login_dir\"; jar=\"$login_dir/cookies.txt\"; rm -f \"$jar\"; page=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -c \"$jar\" 'https://www.luogu.com.cn/auth/login'); csrf=$(printf '%s' \"$page\" | sed -n 's/.*meta name=\"csrf-token\" content=\"\\([^\"]*\\\)\".*/\\1/p' | head -1); image=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'Referer: https://www.luogu.com.cn/' -b \"$jar\" \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\" | base64 -w0); jq -nc --arg csrf \"$csrf\" --arg image \"$image\" '{csrfToken:$csrf,captcha:$image}'"]
+    command: ["sh", "-c", "set -eu; umask 077; login_dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/luogu-login\"; mkdir -p \"$login_dir\"; chmod 700 \"$login_dir\"; jar=\"$login_dir/cookies.txt\"; rm -f \"$jar\"; page=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -c \"$jar\" 'https://www.luogu.com.cn/auth/login'); csrf=$(printf '%s' \"$page\" | sed -n 's/.*meta name=\"csrf-token\" content=\"\\([^\"]*\\)\".*/\\1/p' | head -1); image=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'Referer: https://www.luogu.com.cn/' -b \"$jar\" \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\" | base64 -w0); sf=$(mktemp); if=$(mktemp); trap 'rm -f \"$sf\" \"$if\"' EXIT\ncat >\"$sf\" <<EOF\n$csrf\nEOF\ncat >\"$if\" <<EOF\n$image\nEOF\njq -nc --rawfile csrf \"$sf\" --rawfile image \"$if\" '{csrfToken:($csrf|sub(\"\\n$\";\"\")),captcha:($image|sub(\"\\n$\";\"\"))}'"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1940,7 +1940,7 @@ Panel {
   // so the mime type is carried through instead of being assumed.
   Process {
     id: postCaptchaProc
-    command: ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-post-captcha", uid, cookieJarPath]
+    command: ["sh", "-c", "set -eu; out=$(mktemp); tf=$(mktemp); df=$(mktemp); trap 'rm -f \"$out\" \"$tf\" \"$df\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); cat >\"$tf\" <<EOF\n$type\nEOF\ncat >\"$df\" <<EOF\n$data\nEOF\njq -nc --rawfile type \"$tf\" --rawfile data \"$df\" '{mime:($type|sub(\"\\n$\";\"\")),data:($data|sub(\"\\n$\";\"\"))}'", "luogu-post-captcha", uid, cookieJarPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1974,7 +1974,7 @@ Panel {
 
   Process {
     id: replyCaptchaProc
-    command: ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-reply-captcha", uid, cookieJarPath]
+    command: ["sh", "-c", "set -eu; out=$(mktemp); tf=$(mktemp); df=$(mktemp); trap 'rm -f \"$out\" \"$tf\" \"$df\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); cat >\"$tf\" <<EOF\n$type\nEOF\ncat >\"$df\" <<EOF\n$data\nEOF\njq -nc --rawfile type \"$tf\" --rawfile data \"$df\" '{mime:($type|sub(\"\\n$\";\"\")),data:($data|sub(\"\\n$\";\"\"))}'", "luogu-reply-captcha", uid, cookieJarPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
