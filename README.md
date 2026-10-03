@@ -83,6 +83,12 @@ omarchy bar set bearthomas.luogu defaultLanguage "C++14 (GCC 9)"
 - **Credentials** live in `secret-tool` (or a `0600` file) and a small state file
   at `~/.local/state/omarchy/luogu-session.json`, written under `umask 077` and
   created `0600`. Nothing is sent anywhere except `www.luogu.com.cn`.
+- **Requests never carry the session secret as a command-line argument.** The
+  commands receive *paths* to two derived `0600` files — `luogu-cookies.txt` (a
+  Netscape jar with `_uid` / `__client_id`, read by curl with `-b`) and
+  `luogu-csrf.txt` (the scraped `X-CSRF-Token`, read with `$(cat …)`). Process
+  arguments are world-readable on Linux (`/proc/<pid>/cmdline`), so a secret in
+  `argv` is a secret for every local account; see trap 15.
 - The **login cookie jar** lives in a private `0700` directory
   (`$XDG_STATE_HOME/omarchy/luogu-login/`, file `0600`, removed after the login
   attempt) rather than at a fixed path in `/tmp` — `/tmp` is world-readable and a
@@ -342,6 +348,36 @@ The widget stores the two login values in the desktop Secret Service through
    The same audit covered every other write in the plugin: they are either `mktemp`
    paths, or `0600` files written under `umask 077` inside the state directory
    through a temp file plus `mv`.
+
+15. **A session secret in `argv` is a session secret for every local account.**
+   Linux keeps `/proc/<pid>/cmdline` world-readable, so passing `_uid` /
+   `__client_id` (or the CSRF token) as positional arguments to `sh -c`, and letting
+   the shell expand them into curl's `-H "Cookie: …"`, exposed them to any other
+   account the moment a request ran — the private `0600` cookie jar is worthless if
+   the same value is in the process list. Reproduced with a stub `curl` that sleeps
+   so the child can be inspected:
+
+   ```text
+   [old] curl -sS -H Cookie: _uid=1611655;__client_id=<secret> https://www.luogu.com.cn/…
+   [new] curl -sS -b /home/<user>/.local/state/omarchy/luogu-cookies.txt https://…
+   ```
+
+   Every request now receives **paths to private files** and nothing else secret:
+   the cookie jar (written `0600` under `umask 077` via temp file plus `mv`, in
+   Netscape format so curl reads it with `-b`) and the CSRF token file. `_uid` is
+   still passed as an argument, because it is public — it is in every profile URL
+   and shown in the plugin's own UI. The login POST is the one remaining caller
+   that carries a CSRF token in `argv`; that token belongs to the pre-login session
+   (the password itself already travels through stdin).
+
+   Verified with a live scan: while the panel fired a burst of requests, 2182
+   samples of every `/proc/*/cmdline` on the machine found **zero** occurrences of
+   the client id. Reads were then re-checked against the real session (tags,
+   problem list/detail, solutions, account settings, paste list, chat, forums, the
+   CSRF scrape) and a write path was exercised side-effect-free — `paste/_new` with
+   a bogus captcha comes back `CaptchaChallengeException` (i.e. cookie *and* CSRF
+   were accepted and nothing was created), and `POST /user/setting/userSpace` with
+   an empty body (a documented no-op) returns `{"id":1611655}|200`.
 
 ### Contest problems open in their own window
 

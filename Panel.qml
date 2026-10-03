@@ -23,6 +23,24 @@ Panel {
 
   property string uid: ""
   property string clientId: ""
+  // ---- 会话密钥不进命令行 ------------------------------------------------
+  // 请求以前把 `_uid` / `__client_id`（还有 CSRF 令牌）当成 curl / sh 的**命令行
+  // 参数**传下去。本机其他账号读得到 /proc/<pid>/cmdline（进程参数默认全局可读），
+  // 那等于绕开我们把 cookie jar 改成 0600 私有文件的努力。
+  // 现在命令只收到**路径**：cookie 落在 0600 的 jar 里，CSRF 令牌落在 0600 的文件
+  // 里，curl 用 `-b <jar>` 和 `$(cat <file>)` 去读，参数里只剩公开数据（题号、
+  // 页码、验证码…）和 `_uid`（UID 本来就是公开的，每个个人主页 URL 里都有）。
+  // 路径用 Quickshell.env 同步算出来，避免"请求先发、文件还没写好"的竞态。
+  readonly property string stateDir: {
+    var base = String(Quickshell.env("XDG_STATE_HOME") || "")
+    if (base === "") base = String(Quickshell.env("HOME") || "") + "/.local/state"
+    return base + "/omarchy"
+  }
+  readonly property string cookieJarPath: stateDir + "/luogu-cookies.txt"
+  readonly property string csrfFilePath: stateDir + "/luogu-csrf.txt"
+  property bool cookieJarRefreshPending: false
+  property string pendingCookieJar: ""
+  property string pendingCsrfToken: ""
   property string statusText: "未登录"
   property bool loading: false
   property var profile: Model.parseProfile(null)
@@ -319,14 +337,15 @@ Panel {
       statusText = "请填写 UID 和 __client_id"
       return
     }
-    secretStore.secret = JSON.stringify({ uid: uid.trim(), clientId: clientId.trim() })
+    secretStore.secret = JSON.stringify({ uid: uid.trim(), cookieJarPath: clientId.trim() })
     secretStore.running = true
     fileStore.secret = secretStore.secret
     fileStore.running = true
     statusText = "正在保存登录信息…"
-    // Credentials are already available in memory. Refresh immediately so a
-    // successful login does not depend on Secret Service/file I/O callbacks.
-    Qt.callLater(root.refresh)
+    // Credentials are available in memory now, but the request path reads them
+    // from the 0600 cookie jar (they must not travel as command-line arguments),
+    // so refresh once that write has landed.
+    Qt.callLater(function() { root.syncCookieJar(true) })
   }
 
   function requestCaptcha() {
@@ -403,7 +422,7 @@ Panel {
     if (!root.problemDetail || problemPostsProc.running) return
     root.problemPostPage = Math.max(1, page)
     root.problemPostsLoading = true
-    problemPostsProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/discuss?forum=$3&_contentOnly=1&page=$4\"", "luogu-problemposts", uid, clientId, root.problemDetail.pid, String(root.problemPostPage)]
+    problemPostsProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/discuss?forum=$3&_contentOnly=1&page=$4\"", "luogu-problemposts", uid, cookieJarPath, root.problemDetail.pid, String(root.problemPostPage)]
     problemPostsProc.running = true
   }
 
@@ -422,7 +441,7 @@ Panel {
     root.threadPage = Math.max(1, page)
     threadProc.page = root.threadPage
     root.threadLoading = true
-    threadProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/discuss/$3?_contentOnly=1&page=$4\"", "luogu-thread", uid, clientId, String(root.threadId), String(root.threadPage)]
+    threadProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/discuss/$3?_contentOnly=1&page=$4\"", "luogu-thread", uid, cookieJarPath, String(root.threadId), String(root.threadPage)]
     threadProc.running = true
   }
 
@@ -495,7 +514,7 @@ Panel {
   function loadTagTable() {
     if (tagTableProc.running || root.tagTable.groups.length > 0) return
     root.tagTableLoading = true
-    tagTableProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"Cookie: _uid=$1;__client_id=$2\" 'https://www.luogu.com.cn/_lfe/tags/zh-CN'", "luogu-tags", uid, clientId]
+    tagTableProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" 'https://www.luogu.com.cn/_lfe/tags/zh-CN'", "luogu-tags", uid, cookieJarPath]
     tagTableProc.running = true
   }
 
@@ -521,7 +540,7 @@ Panel {
     if (root.problemOrderName === "难度 ↑") query += "&orderBy=difficulty&order=asc"
     else if (root.problemOrderName === "难度 ↓") query += "&orderBy=difficulty&order=desc"
     else if (root.problemOrderName === "编号 ↓") query += "&orderBy=pid&order=desc"
-    problemListProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/problem/list$3\"", "luogu-problemlist", uid, clientId, query]
+    problemListProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/problem/list$3\"", "luogu-problemlist", uid, cookieJarPath, query]
     problemListProc.running = true
   }
   function openProblem(pid) {
@@ -533,7 +552,7 @@ Panel {
     // 题目详情接口不带题解数，列表要点了才知道，先清掉上一题的残留值。
     root.solutionList = []
     root.solutionCount = 0
-    problemDetailProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/problem/$3?_contentOnly=1\"", "luogu-problem", uid, clientId, pid]
+    problemDetailProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/problem/$3?_contentOnly=1\"", "luogu-problem", uid, cookieJarPath, pid]
     problemDetailProc.running = true
   }
 
@@ -543,7 +562,7 @@ Panel {
     root.solutionList = []
     root.solutionCount = 0
     root.solutionLoading = true
-    solutionsProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/problem/solution/$3?_contentOnly=1\"", "luogu-solutions", uid, clientId, pid]
+    solutionsProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/problem/solution/$3?_contentOnly=1\"", "luogu-solutions", uid, cookieJarPath, pid]
     solutionsProc.running = true
   }
 
@@ -552,7 +571,7 @@ Panel {
     root.problemView = "article"
     root.solutionArticle = null
     root.articleLoading = true
-    articleProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/article/$3?_contentOnly=1\"", "luogu-article", uid, clientId, lid]
+    articleProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/article/$3?_contentOnly=1\"", "luogu-article", uid, cookieJarPath, lid]
     articleProc.running = true
   }
 
@@ -585,8 +604,8 @@ Panel {
     postDetailProc.page = page
     postDetailProc.command = [
       "sh", "-c",
-      "curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/discuss/$3?_contentOnly=1&page=$4\"",
-      "luogu-postdetail", uid, clientId, postDetailId, String(page)
+      "curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/discuss/$3?_contentOnly=1&page=$4\"",
+      "luogu-postdetail", uid, cookieJarPath, postDetailId, String(page)
     ]
     postDetailProc.running = true
   }
@@ -608,7 +627,7 @@ Panel {
     userSpaceIntro = root.profile.introduction
     userSpaceBackground = root.profile.background
     userSpaceStatus = ""
-    var base = ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/$3?_contentOnly=1\"", "luogu-account", uid, clientId]
+    var base = ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/$3?_contentOnly=1\"", "luogu-account", uid, cookieJarPath]
     accountPrizeProc.command = base.concat(["user/setting/prize"])
     accountPrizeProc.running = true
     accountSecurityProc.command = base.concat(["user/setting/security"])
@@ -641,7 +660,7 @@ Panel {
   function userSpaceProcRunning() { return userSpaceProc.running }
 
   function pasteCommand(path) {
-    return ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/paste' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/$3\"", "luogu-paste", uid, clientId, path]
+    return ["sh", "-c", "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/paste' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/$3\"", "luogu-paste", uid, cookieJarPath, path]
   }
 
   function loadPastes(append) {
@@ -682,7 +701,7 @@ Panel {
     root.pasteCaptchaReady = false
     root.pasteCaptchaImage = ""
     root.pasteCaptchaCode = ""
-    pasteCaptchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/\" -H \"Cookie: _uid=$1;__client_id=$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-paste-captcha", uid, clientId]
+    pasteCaptchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/\" -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/lg4/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-paste-captcha", uid, cookieJarPath]
     pasteCaptchaProc.running = true
   }
 
@@ -798,8 +817,8 @@ Panel {
     chatLoading = true
     chatRecordProc.command = [
       "sh", "-c",
-      "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/api/chat/record?user=$3\"",
-      "luogu-chatrecord", uid, clientId, chatSelectedUid
+      "curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/api/chat/record?user=$3\"",
+      "luogu-chatrecord", uid, cookieJarPath, chatSelectedUid
     ]
     chatRecordProc.running = true
   }
@@ -812,8 +831,8 @@ Panel {
     chatSearchProc.keyword = keyword
     chatSearchProc.command = [
       "sh", "-c",
-      "curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"Cookie: _uid=$1;__client_id=$2\" --get --data-urlencode \"keyword=$3\" 'https://www.luogu.com.cn/api/user/search'",
-      "luogu-chatsearch", uid, clientId, keyword
+      "curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" --get --data-urlencode \"keyword=$3\" 'https://www.luogu.com.cn/api/user/search'",
+      "luogu-chatsearch", uid, cookieJarPath, keyword
     ]
     chatSearchProc.running = true
   }
@@ -975,6 +994,71 @@ Panel {
     }
   }
 
+  // 把当前会话写成 curl 认识的那种 cookie 文件（0600，umask 077，临时文件 + mv）。
+  // thenRefresh=true 时等写完再 refresh —— 否则第一次请求可能跑在 jar 之前。
+  function syncCookieJar(thenRefresh) {
+    if (String(uid).trim() === "" || String(clientId).trim() === "") return
+    if (thenRefresh) cookieJarRefreshPending = true
+    var body = "# Netscape HTTP Cookie File\n"
+      + ".luogu.com.cn\tTRUE\t/\tFALSE\t0\t_uid\t" + String(uid).trim() + "\n"
+      + ".luogu.com.cn\tTRUE\t/\tFALSE\t0\t__client_id\t" + String(clientId).trim() + "\n"
+    if (cookieJarProc.running) { pendingCookieJar = body; return }
+    cookieJarProc.payload = body
+    cookieJarProc.running = true
+  }
+
+  function syncCsrfFile() {
+    var token = String(csrfToken || "")
+    if (token === "") return
+    if (csrfFileProc.running) { pendingCsrfToken = token; return }
+    csrfFileProc.payload = token
+    csrfFileProc.running = true
+  }
+
+  Process {
+    id: cookieJarProc
+    property string payload: ""
+    stdinEnabled: true
+    // $1 = jar 路径（不是密钥），脚本自己建目录、限权限、原子替换
+    command: ["sh", "-c", "set -eu; umask 077; dir=$(dirname \"$1\"); mkdir -p \"$dir\"; IFS= read -r encoded; tmp=$(mktemp \"$dir/.luogu-cookies.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" \"$1\"", "luogu-cookie-jar", cookieJarPath]
+    onStarted: {
+      write(Model.utf8Base64(payload) + "\n")
+      payload = ""
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) statusText = "会话 cookie 文件写入失败，请求可能被洛谷拒绝"
+      if (pendingCookieJar !== "") {
+        cookieJarProc.payload = pendingCookieJar
+        pendingCookieJar = ""
+        cookieJarProc.running = true
+        return
+      }
+      if (cookieJarRefreshPending) {
+        cookieJarRefreshPending = false
+        root.refresh()
+      }
+    }
+  }
+
+  Process {
+    id: csrfFileProc
+    property string payload: ""
+    stdinEnabled: true
+    command: ["sh", "-c", "set -eu; umask 077; dir=$(dirname \"$1\"); mkdir -p \"$dir\"; IFS= read -r encoded; tmp=$(mktemp \"$dir/.luogu-csrf.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$tmp\"; chmod 600 \"$tmp\"; mv \"$tmp\" \"$1\"", "luogu-csrf-file", csrfFilePath]
+    onStarted: {
+      write(Model.utf8Base64(payload) + "\n")
+      payload = ""
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) statusText = "CSRF 令牌文件写入失败，写操作可能被洛谷拒绝"
+      if (pendingCsrfToken !== "") {
+        csrfFileProc.payload = pendingCsrfToken
+        pendingCsrfToken = ""
+        csrfFileProc.running = true
+      }
+    }
+  }
+
   function applyCredentials(raw) {
     try {
       var saved = JSON.parse(String(raw || ""))
@@ -986,7 +1070,7 @@ Panel {
     credentialReadsPending = Math.max(0, credentialReadsPending - 1)
     if (credentialReadsPending === 0) {
       credentialsReady = true
-      if (root.uid !== "" && root.clientId !== "") root.refresh()
+      if (root.uid !== "" && root.clientId !== "") root.syncCookieJar(true)
       else statusText = "未登录"
     }
   }
@@ -1006,21 +1090,21 @@ Panel {
       "-H", "X-Requested-With: XMLHttpRequest",
       "-H", "Referer: https://www.luogu.com.cn/",
       "-H", "x-lentille-request: content-only",
-      "-H", "Cookie: _uid=" + uid + ";__client_id=" + clientId,
+      "-b", cookieJarPath,
       "https://www.luogu.com.cn/user/" + encodeURIComponent(uid) + "?_contentOnly=1"
     ]
     apiProc.running = true
     contestProc.command = [
       "sh", "-c",
-      "set -u; uid=\"$1\"; client=\"$2\"; page=\"$3\"; cookie=\"_uid=$uid;__client_id=$client\"; now=$(date +%s); list=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: $cookie\" \"https://www.luogu.com.cn/contest/list?_contentOnly=1&page=$page\") || exit 1; details='[]'; for id in $(printf '%s' \"$list\" | jq -r --argjson now \"$now\" '[.data.contests.result[] | select(.endTime > $now)][0:8][].id'); do joined=$(curl -fsS --max-time 10 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: $cookie\" \"https://www.luogu.com.cn/contest/$id?_contentOnly=1\" | jq -c '.data.joined // null' 2>/dev/null || printf 'null'); details=$(printf '%s' \"$details\" | jq -c --arg id \"$id\" --argjson joined \"$joined\" '. + [{id: ($id | tonumber), joined: $joined}]' 2>/dev/null || printf '%s' \"$details\"); done; printf '%s' \"$list\" | jq -c --argjson details \"$details\" --argjson page \"$page\" '{count: .data.contests.count, perPage: .data.contests.perPage, page: $page, contests: (reduce $details[] as $detail ((.data.contests.result | map(. + {joined: null})); map(if .id == $detail.id then . + {joined: $detail.joined} else . end)))}'",
-      "luogu-contests", uid, clientId, String(contestPage)
+      "set -u; jar=\"$2\"; page=\"$3\"; now=$(date +%s); list=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$jar\" \"https://www.luogu.com.cn/contest/list?_contentOnly=1&page=$page\") || exit 1; details='[]'; for id in $(printf '%s' \"$list\" | jq -r --argjson now \"$now\" '[.data.contests.result[] | select(.endTime > $now)][0:8][].id'); do joined=$(curl -fsS --max-time 10 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$jar\" \"https://www.luogu.com.cn/contest/$id?_contentOnly=1\" | jq -c '.data.joined // null' 2>/dev/null || printf 'null'); details=$(printf '%s' \"$details\" | jq -c --arg id \"$id\" --argjson joined \"$joined\" '. + [{id: ($id | tonumber), joined: $joined}]' 2>/dev/null || printf '%s' \"$details\"); done; printf '%s' \"$list\" | jq -c --argjson details \"$details\" --argjson page \"$page\" '{count: .data.contests.count, perPage: .data.contests.perPage, page: $page, contests: (reduce $details[] as $detail ((.data.contests.result | map(. + {joined: null})); map(if .id == $detail.id then . + {joined: $detail.joined} else . end)))}'",
+      "luogu-contests", uid, cookieJarPath, String(contestPage)
     ]
     contestProc.running = true
     activityLoading = true
     activityProc.command = [
       "sh", "-c",
-      "uid=\"$1\"; client=\"$2\"; cookie=\"_uid=$uid;__client_id=$client\"; headers=\"-A vscode-luogu@4.17.1 -H X-Requested-With:XMLHttpRequest -H Referer:https://www.luogu.com.cn/ -H x-lentille-request:content-only -H Cookie:$cookie\"; notice=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/user/notification?_contentOnly=1&page=1' 2>/dev/null || printf '{}'); chat=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/chat?_contentOnly=1' 2>/dev/null || printf '{}'); jq -nc --argjson notice \"$notice\" --argjson chat \"$chat\" '{notice:$notice,chat:$chat}'",
-      "luogu-activity", uid, clientId
+      "jar=\"$2\"; headers=\"-A vscode-luogu@4.17.1 -H X-Requested-With:XMLHttpRequest -H Referer:https://www.luogu.com.cn/ -H x-lentille-request:content-only -b $jar\"; notice=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/user/notification?_contentOnly=1&page=1' 2>/dev/null || printf '{}'); chat=$(curl -fsS --max-time 12 $headers 'https://www.luogu.com.cn/chat?_contentOnly=1' 2>/dev/null || printf '{}'); jq -nc --argjson notice \"$notice\" --argjson chat \"$chat\" '{notice:$notice,chat:$chat}'",
+      "luogu-activity", uid, cookieJarPath
     ]
     activityProc.running = true
     csrfProc.running = true
@@ -1035,7 +1119,7 @@ Panel {
     feedProc.target = "watching"
     feedProc.command = feedCommand("watching", 1)
     feedProc.running = true
-    postProc.command = ["curl", "-fsS", "--max-time", "12", "-A", "vscode-luogu@4.17.1", "-H", "X-Requested-With: XMLHttpRequest", "-H", "Referer: https://www.luogu.com.cn/", "-H", "x-lentille-request: content-only", "-H", "Cookie: _uid=" + uid + ";__client_id=" + clientId, "https://www.luogu.com.cn/discuss?_contentOnly=1&page=1"]
+    postProc.command = ["curl", "-fsS", "--max-time", "12", "-A", "vscode-luogu@4.17.1", "-H", "X-Requested-With: XMLHttpRequest", "-H", "Referer: https://www.luogu.com.cn/", "-H", "x-lentille-request: content-only", "-b", cookieJarPath, "https://www.luogu.com.cn/discuss?_contentOnly=1&page=1"]
     postProc.running = true
   }
 
@@ -1058,7 +1142,7 @@ Panel {
     contestPlacementTimer.restart()
     contestDetail = null
     contestDetailLoading = true
-    contestDetailProc.command = ["curl", "-fsS", "--max-time", "15", "-A", "vscode-luogu@4.17.1", "-H", "X-Requested-With: XMLHttpRequest", "-H", "Referer: https://www.luogu.com.cn/", "-H", "x-lentille-request: content-only", "-H", "Cookie: _uid=" + uid + ";__client_id=" + clientId, "https://www.luogu.com.cn/contest/" + id + "?_contentOnly=1"]
+    contestDetailProc.command = ["curl", "-fsS", "--max-time", "15", "-A", "vscode-luogu@4.17.1", "-H", "X-Requested-With: XMLHttpRequest", "-H", "Referer: https://www.luogu.com.cn/", "-H", "x-lentille-request: content-only", "-b", cookieJarPath, "https://www.luogu.com.cn/contest/" + id + "?_contentOnly=1"]
     contestDetailProc.running = true
   }
 
@@ -1073,7 +1157,7 @@ Panel {
       "-H", "X-Requested-With: XMLHttpRequest",
       "-H", "Referer: https://www.luogu.com.cn/"]
     if (mine) argv = argv.concat(["-H", "x-lentille-request: content-only"])
-    return argv.concat(["-H", "Cookie: _uid=" + uid + ";__client_id=" + clientId, url])
+    return argv.concat(["-b", cookieJarPath, url])
   }
 
   function loadMoreFeed() {
@@ -1181,7 +1265,7 @@ Panel {
     // request and they all came back as InvalidCSRFTokenException. The full page
     // (and the real "1790346447:HGUqzFKa/FZjo...=" token) is served when only
     // Referer is sent.
-    command: ["sh", "-c", "set -eu; page=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Referer: https://www.luogu.com.cn/' -H \"Cookie: _uid=$1;__client_id=$2\" 'https://www.luogu.com.cn/'); printf '%s' \"$page\" | sed -n 's/.*meta name=\"csrf-token\" content=\"\\([^\"]*\\\)\".*/\\1/p' | head -1", "luogu-csrf", uid, clientId]
+    command: ["sh", "-c", "set -eu; page=$(curl -fsS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" 'https://www.luogu.com.cn/'); printf '%s' \"$page\" | sed -n 's/.*meta name=\"csrf-token\" content=\"\\([^\"]*\\\)\".*/\\1/p' | head -1", "luogu-csrf", uid, cookieJarPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1190,6 +1274,7 @@ Panel {
         // scrape) counts as "not ready yet", so the write paths report that up
         // front instead of sending garbage and blaming the server afterwards.
         root.csrfToken = /^[0-9]{6,}:[A-Za-z0-9+/=]{8,}$/.test(token) ? token : ""
+        if (root.csrfToken !== "") root.syncCsrfFile()
       }
     }
   }
@@ -1244,7 +1329,7 @@ Panel {
   // can change while the shell stays up.
   Process {
     id: forumPermProc
-    command: ["sh", "-c", "set -eu; uid=\"$1\"; client=\"$2\"; cookie=\"_uid=$uid;__client_id=$client\"; headers=\"-A vscode-luogu@4.17.1 -H X-Requested-With:XMLHttpRequest -H x-lentille-request:content-only -H Referer:https://www.luogu.com.cn/ -H Cookie:$cookie\"; base='https://www.luogu.com.cn/discuss?_contentOnly=1&page=1'; list=$(curl -fsS --max-time 12 $headers \"$base\" | jq -c '[.data.publicForums[] | {slug: .slug, name: .name}]'); out='[]'; for slug in $(printf '%s' \"$list\" | jq -r '.[].slug'); do name=$(printf '%s' \"$list\" | jq -r --arg s \"$slug\" '.[] | select(.slug == $s) | .name'); can=$(curl -fsS --max-time 12 $headers \"$base&forum=$slug\" | jq -r '.data.canPost // false'); out=$(printf '%s' \"$out\" | jq -c --arg s \"$slug\" --arg n \"$name\" --argjson c \"$can\" '. + [{slug: $s, name: $n, canPost: $c}]'); done; printf '%s' \"$out\"", "luogu-forums", uid, clientId]
+    command: ["sh", "-c", "set -eu; jar=\"$2\"; headers=\"-A vscode-luogu@4.17.1 -H X-Requested-With:XMLHttpRequest -H x-lentille-request:content-only -H Referer:https://www.luogu.com.cn/ -b $jar\"; base='https://www.luogu.com.cn/discuss?_contentOnly=1&page=1'; list=$(curl -fsS --max-time 12 $headers \"$base\" | jq -c '[.data.publicForums[] | {slug: .slug, name: .name}]'); out='[]'; for slug in $(printf '%s' \"$list\" | jq -r '.[].slug'); do name=$(printf '%s' \"$list\" | jq -r --arg s \"$slug\" '.[] | select(.slug == $s) | .name'); can=$(curl -fsS --max-time 12 $headers \"$base&forum=$slug\" | jq -r '.data.canPost // false'); out=$(printf '%s' \"$out\" | jq -c --arg s \"$slug\" --arg n \"$name\" --argjson c \"$can\" '. + [{slug: $s, name: $n, canPost: $c}]'); done; printf '%s' \"$out\"", "luogu-forums", uid, cookieJarPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1257,7 +1342,7 @@ Panel {
   Process {
     id: benbenProc
     property string content: ""
-    command: ["sh", "-c", "set -eu; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/x-www-form-urlencoded' -H \"Cookie: _uid=$1;__client_id=$2\" --data-urlencode \"content=$4\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/feed/postBenben'", "luogu-benben", uid, clientId, csrfToken, content]
+    command: ["sh", "-c", "set -eu; curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/x-www-form-urlencoded' -b \"$2\" --data-urlencode \"content=$4\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/feed/postBenben'", "luogu-benben", uid, cookieJarPath, csrfFilePath, content]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1290,7 +1375,7 @@ Panel {
     id: chatProc
     property string target: ""
     property string content: ""
-    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg user \"$4\" --arg content \"$5\" '{user:($user|tonumber),content:$content}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" -d \"$payload\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/chat/new'", "luogu-chat", uid, clientId, csrfToken, target, content]
+    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg user \"$4\" --arg content \"$5\" '{user:($user|tonumber),content:$content}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" -d \"$payload\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/chat/new'", "luogu-chat", uid, cookieJarPath, csrfFilePath, target, content]
     property bool succeeded: false
     property string errorMessage: ""
     stdout: StdioCollector {
@@ -1528,7 +1613,7 @@ Panel {
     property string resultId: ""
     stdinEnabled: true
     // $4 = 路径，$5 = query（删除是 DELETE /paste/_edit?id=…），$6 = 方法
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -X $6 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4$5\"", "luogu-paste-write", uid, clientId, csrfToken, target, query, httpMethod]
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -X $6 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/$4$5\"", "luogu-paste-write", uid, cookieJarPath, csrfFilePath, target, query, httpMethod]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""
@@ -1611,7 +1696,7 @@ Panel {
     stdinEnabled: true
     property bool succeeded: false
     property string errorMessage: ""
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/user/setting' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/user/setting/userSpace'", "luogu-userspace", uid, clientId, csrfToken]
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/user/setting' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' 'https://www.luogu.com.cn/user/setting/userSpace'", "luogu-userspace", uid, cookieJarPath, csrfFilePath]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""
@@ -1703,7 +1788,7 @@ Panel {
     property bool succeeded: false
     property string errorMessage: ""
     property bool problemContext: false
-    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg captcha \"$4\" --arg content \"$6\" --arg title \"$5\" --arg forum \"$7\" '{captcha:$captcha,content:$content,title:$title,forum:$forum}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" -d \"$payload\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/discuss/post'", "luogu-post", uid, clientId, csrfToken, captcha, title, content, forum]
+    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg captcha \"$4\" --arg content \"$6\" --arg title \"$5\" --arg forum \"$7\" '{captcha:$captcha,content:$content,title:$title,forum:$forum}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" -d \"$payload\" -w '|%{http_code}' 'https://www.luogu.com.cn/api/discuss/post'", "luogu-post", uid, cookieJarPath, csrfFilePath, captcha, title, content, forum]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1751,7 +1836,7 @@ Panel {
     property string content: ""
     property bool succeeded: false
     property string errorMessage: ""
-    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg captcha \"$4\" --arg content \"$5\" '{captcha:$captcha,content:$content}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $3\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" -d \"$payload\" -w '|%{http_code}' \"https://www.luogu.com.cn/api/discuss/reply/$6\"", "luogu-reply", uid, clientId, csrfToken, captcha, content, postId]
+    command: ["sh", "-c", "set -eu; payload=$(jq -nc --arg captcha \"$4\" --arg content \"$5\" '{captcha:$captcha,content:$content}'); curl -sS --max-time 15 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"X-CSRF-Token: $(cat \"$3\")\" -H 'Content-Type: application/json' -b \"$2\" -d \"$payload\" -w '|%{http_code}' \"https://www.luogu.com.cn/api/discuss/reply/$6\"", "luogu-reply", uid, cookieJarPath, csrfFilePath, captcha, content, postId]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1818,7 +1903,7 @@ Panel {
   // so the mime type is carried through instead of being assumed.
   Process {
     id: postCaptchaProc
-    command: ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"Cookie: _uid=$1;__client_id=$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-post-captcha", uid, clientId]
+    command: ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-post-captcha", uid, cookieJarPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1852,7 +1937,7 @@ Panel {
 
   Process {
     id: replyCaptchaProc
-    command: ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H \"Cookie: _uid=$1;__client_id=$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-reply-captcha", uid, clientId]
+    command: ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-reply-captcha", uid, cookieJarPath]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -3733,6 +3818,8 @@ Panel {
               markdownBlockLimit: root.markdownBlockLimit
               uid: root.uid
               clientId: root.clientId
+              cookieJarPath: root.cookieJarPath
+              csrfFilePath: root.csrfFilePath
               csrfToken: root.csrfToken
               tagTable: root.tagTable
               draftHost: root
@@ -5286,6 +5373,8 @@ Panel {
             markdownBlockLimit: root.markdownBlockLimit
             uid: root.uid
             clientId: root.clientId
+            cookieJarPath: root.cookieJarPath
+            csrfFilePath: root.csrfFilePath
             csrfToken: root.csrfToken
             tagTable: root.tagTable
             draftHost: root

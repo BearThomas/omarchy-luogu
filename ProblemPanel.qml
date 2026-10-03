@@ -17,6 +17,10 @@ Column {
   property string pid: ""
   property string uid: ""
   property string clientId: ""
+  // 会话 cookie / CSRF 令牌只以**路径**形式传进来（见 Panel.qml 顶部注释）：
+  // 密钥本身写在 0600 文件里，命令行参数里不出现
+  property string cookieJarPath: ""
+  property string csrfFilePath: ""
   property string csrfToken: ""
   property var tagTable: ({ byId: {}, groups: [] })
   property color foreground: Color.foreground
@@ -225,7 +229,7 @@ Column {
     root.captchaReady = false
     root.captchaCode = ""
     recordTimer.stop()
-    detailProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/problem/$3?_contentOnly=1\"", "luogu-pwindow-problem", uid, clientId, pid]
+    detailProc.command = ["sh", "-c", "curl -sS --max-time 25 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/problem/$3?_contentOnly=1\"", "luogu-pwindow-problem", uid, root.cookieJarPath, pid]
     detailProc.running = true
     root.requestTagTable()
   }
@@ -239,7 +243,7 @@ Column {
     root.captchaCode = ""
     // Referer 要和提交时一致（都是题目页）：验证码是按会话 + 来源页绑定的，
     // 用首页去取、用题目页去交，容易被判「验证码错误」。
-    captchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/problem/$3\" -H \"Cookie: _uid=$1;__client_id=$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-pwindow-captcha", uid, clientId, pid]
+    captchaProc.command = ["sh", "-c", "set -eu; out=$(mktemp); trap 'rm -f \"$out\"' EXIT; type=$(curl -sS --max-time 12 -A 'vscode-luogu@4.17.1' -H 'Cache-Control: no-cache' -H 'X-Requested-With: XMLHttpRequest' -H \"Referer: https://www.luogu.com.cn/problem/$3\" -b \"$2\" -o \"$out\" -w '%{content_type}' \"https://www.luogu.com.cn/api/verify/captcha?_t=$(date +%s%N)\"); data=$(base64 -w0 \"$out\"); jq -nc --arg type \"$type\" --arg data \"$data\" '{mime:$type,data:$data}'", "luogu-pwindow-captcha", uid, root.cookieJarPath, pid]
     captchaProc.running = true
   }
 
@@ -369,7 +373,7 @@ Column {
     property bool succeeded: false
     property string errorMessage: ""
     stdinEnabled: true
-    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 30 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/problem/$3' -H \"X-CSRF-Token: $4\" -H 'Content-Type: application/json' -H \"Cookie: _uid=$1;__client_id=$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/fe/api/problem/submit/$3\"", "luogu-pwindow-submit", uid, clientId, pid, csrfToken]
+    command: ["sh", "-c", "set -eu; IFS= read -r encoded; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s' \"$encoded\" | base64 -d > \"$f\"; curl -sS --max-time 30 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/problem/$3' -H \"X-CSRF-Token: $(cat \"$4\")\" -H 'Content-Type: application/json' -b \"$2\" --data-binary @\"$f\" -w '|%{http_code}' \"https://www.luogu.com.cn/fe/api/problem/submit/$3\"", "luogu-pwindow-submit", uid, root.cookieJarPath, pid, root.csrfFilePath]
     onStarted: {
       write(payloadBase64 + "\n")
       payloadBase64 = ""
@@ -583,7 +587,7 @@ Column {
     onTriggered: {
       if (!root.polling || root.rid <= 0) { stop(); return }
       if (recordProc.running) return
-      recordProc.command = ["sh", "-c", "curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -H \"Cookie: _uid=$1;__client_id=$2\" \"https://www.luogu.com.cn/record/$3?_contentOnly=1\"", "luogu-pwindow-record", uid, clientId, String(root.rid)]
+      recordProc.command = ["sh", "-c", "curl -sS --max-time 20 -A 'vscode-luogu@4.17.1' -H 'X-Requested-With: XMLHttpRequest' -H 'Referer: https://www.luogu.com.cn/' -H 'x-lentille-request: content-only' -b \"$2\" \"https://www.luogu.com.cn/record/$3?_contentOnly=1\"", "luogu-pwindow-record", uid, root.cookieJarPath, String(root.rid)]
       recordProc.running = true
     }
   }
